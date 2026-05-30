@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dc
+      POSTGRES_PASSWORD: dc
+      POSTGRES_DB: dc_backend
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U dc -d dc_backend" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://dc:dc@db:5432/dc_backend
+      ENVIRONMENT: local
+      PROXMOX_ENABLED: "false"
+      EMAIL_BACKEND: log
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: dc-backend-api
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dc-backend-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRE_MINUTES
+        value: "60"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: MAX_VMS_PER_STUDENT
+        value: "2"
+      - key: DEFAULT_PAGE_SIZE
+        value: "20"
+      - key: PROXMOX_ENABLED
+        value: "false"
+      - key: EMAIL_BACKEND
+        value: smtp
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+
+databases:
+  - name: dc-backend-db
+    plan: starter
+    postgresMajorVersion: "16"
