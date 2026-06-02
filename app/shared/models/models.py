@@ -1,4 +1,5 @@
 from datetime import datetime
+from sqlalchemy import UniqueConstraint
 from sqlalchemy import (
     Column, Integer, String, Text, Enum, ForeignKey, DateTime, Boolean
 )
@@ -83,6 +84,7 @@ class VM(Base):
     user = relationship("User", back_populates="vms")
 
     delete_requests = relationship("RDeleteVM", back_populates="vm")
+    dns_entries = relationship("DNSEntry", back_populates="vm", cascade="all, delete-orphan")
 
 
 class Requete(Base):
@@ -169,3 +171,22 @@ class Publication(Base):
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user = relationship("User", back_populates="publications")
+
+
+class DNSEntry(Base):
+    """
+    Entrée DNS associant un nom de domaine (hostname FQDN) à une VM.
+    Un même hostname ne peut pointer que vers une seule VM (unicité globale).
+    """
+    __tablename__ = "dns_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    hostname = Column(String(255), nullable=False, unique=True)
+    """Nom de domaine complet, ex: api.monprojet.dc.enspy.cm"""
+
+    vm_id = Column(Integer, ForeignKey("vms.id"), nullable=False)
+    vm = relationship("VM", back_populates="dns_entries")
+
+    __table_args__ = (
+        UniqueConstraint("hostname", name="uq_dns_hostname"),
+    )

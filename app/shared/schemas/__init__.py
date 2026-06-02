@@ -1,5 +1,6 @@
 from .auth import LoginRequest, TokenResponse
 from .common import PaginatedResponse, PaginationParams
+from .dns import DNSEntryCreate, DNSEntryRead, DNSEntryUpdate
 from .user import (
     UserBase,
     StudentCreate, StudentUpdate, StudentRead,
@@ -19,6 +20,7 @@ __all__ = [
     "TokenResponse",
     "PaginationParams",
     "PaginatedResponse",
+    "DNSEntryCreate", "DNSEntryUpdate", "DNSEntryRead",
     "UserBase",
     "StudentCreate", "StudentUpdate", "StudentRead",
     "TeacherCreate", "TeacherUpdate", "TeacherRead",

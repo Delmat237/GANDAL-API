@@ -1,5 +1,6 @@
 from app.shared.models.models import (
     Base,
+    DNSEntry,
     Publication,
     RAccount,
     RCreateVM,
@@ -22,4 +23,5 @@ __all__ = [
     "RDeleteVM",
     "RAccount",
     "Publication",
+    "DNSEntry",
 ]
