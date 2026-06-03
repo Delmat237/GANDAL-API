@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
 
+    superadmin_username: str = "admin"
+    superadmin_email: str = "admin@dc.local"
+    superadmin_password: str = "changeme123"
+    superadmin_secret_key: str = "change-me-admin-secret"
+
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     max_vms_per_student: int = 2
