@@ -21,6 +21,22 @@ def test_login_success(db_session):
     assert token.access_token
 
 
+def test_login_success_with_email(db_session):
+    s = Student(
+        username="u2",
+        email="u2@x.com",
+        password=hash_password("pass"),
+        matricule="M2",
+        level="L1",
+        departement="CS",
+    )
+    db_session.add(s)
+    db_session.commit()
+    token = AuthService(db_session).login(
+        LoginRequest(username="u2@x.com", password="pass"))
+    assert token.access_token
+
+
 def test_login_failure(db_session):
     import pytest
 

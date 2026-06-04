@@ -1,11 +1,13 @@
-from app.shared.models import Base, Student, Teacher
-from app.main import create_app
-from app.infrastructure.proxmox.mock_client import MockProxmoxGateway
-from app.core.security import hash_password
-from app.core.database import get_db
-from app.core.config import get_settings
 import os
 from pathlib import Path
+
+# Les variables d'environnement doivent être définies AVANT d'importer quoi que
+# ce soit depuis `app`, car `app.core.database` crée le moteur SQLAlchemy dès
+# l'import (sinon il tenterait de se connecter à PostgreSQL et exigerait psycopg2).
+os.environ["ENVIRONMENT"] = "test"
+os.environ["DATABASE_URL"] = "sqlite:///./.pytest_dc.db"
+os.environ["JWT_SECRET"] = "test-secret-key-at-least-32-bytes-long"
+os.environ["PROXMOX_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,10 +15,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-os.environ["ENVIRONMENT"] = "test"
-os.environ["DATABASE_URL"] = "sqlite:///./.pytest_dc.db"
-os.environ["JWT_SECRET"] = "test-secret-key-at-least-32-bytes-long"
-os.environ["PROXMOX_ENABLED"] = "false"
+from app.shared.models import Base, Student, Teacher
+from app.main import create_app
+from app.infrastructure.proxmox.mock_client import MockProxmoxGateway
+from app.core.security import hash_password
+from app.core.database import get_db
+from app.core.config import get_settings
 
 
 @pytest.fixture

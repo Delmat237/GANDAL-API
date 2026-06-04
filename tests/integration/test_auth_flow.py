@@ -10,6 +10,15 @@ def test_login_success(client, db_engine, seed_users):
     assert "access_token" in r.json()
 
 
+def test_login_success_with_email(client, db_engine, seed_users):
+    r = client.post(
+        "/api/v1/auth/login",
+        json={"username": "student@example.com", "password": "changeme123"},
+    )
+    assert r.status_code == 200
+    assert "access_token" in r.json()
+
+
 def test_login_failure(client, seed_users):
     r = client.post(
         "/api/v1/auth/login",
