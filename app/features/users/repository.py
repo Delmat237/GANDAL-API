@@ -15,6 +15,13 @@ class UserRepository:
     def get_by_username(self, username: str) -> User | None:
         return self.db.execute(select(User).where(User.username == username)).scalar_one_or_none()
 
+    def get_by_username_or_email(self, identifier: str) -> User | None:
+        return self.db.execute(
+            select(User).where(
+                (User.username == identifier) | (User.email == identifier)
+            )
+        ).scalar_one_or_none()
+
     def list_students(self, offset: int, limit: int) -> tuple[list[Student], int]:
         total = self.db.execute(
             select(func.count()).select_from(Student)).scalar_one()

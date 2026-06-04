@@ -31,7 +31,7 @@ class AuthService:
         return UserService(self.db).create_teacher(teacher_data)
 
     def login(self, data: LoginRequest) -> TokenResponse:
-        user = self.repo.get_by_username(data.username)
+        user = self.repo.get_by_username_or_email(data.username)
         if user is None or not verify_password(data.password, user.password):
             raise UnauthorizedError("Identifiants invalides")
         token = create_access_token(user.id, extra_claims={"type": user.type})
