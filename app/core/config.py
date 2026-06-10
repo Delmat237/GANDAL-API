@@ -23,12 +23,16 @@ class Settings(BaseSettings):
     superadmin_password: str = "changeme123"
     superadmin_secret_key: str = "change-me-admin-secret"
 
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001"
 
     max_vms_per_student: int = 2
     default_page_size: int = 20
 
     proxmox_enabled: bool = False
+    # Mode simulation : l'approbation d'une requête create-vm enregistre la VM
+    # en base avec le statut "waiting" sans appeler Proxmox. Utile lorsque
+    # l'hyperviseur n'est pas joignable (ex. déploiement Render).
+    proxmox_simulation_mode: bool = False
     proxmox_host: str = "192.168.1.100"
     proxmox_user: str = "root@pam"
     proxmox_token_id: str = ""

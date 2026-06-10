@@ -27,6 +27,7 @@ class RCreateVMCreate(BaseModel):
     teacher_id: int
     size_rom: int
     size_ram: int
+    n_cpu: int = 2
     os: str
 
 

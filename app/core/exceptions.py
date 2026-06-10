@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 
 class AppError(Exception):
@@ -33,3 +34,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(_request: Request, _exc: IntegrityError) -> JSONResponse:
+        # Filet de sécurité : une violation de contrainte (unicité, FK…) ne doit
+        # jamais remonter en 500. On répond par un 409 explicite.
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "Conflit : la ressource viole une contrainte d'unicité ou d'intégrité."},
+        )

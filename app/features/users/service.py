@@ -35,6 +35,10 @@ class UserService:
     def create_student(self, data: StudentCreate) -> Student:
         if self.repo.get_by_username(data.username):
             raise ConflictError("Nom d'utilisateur déjà utilisé")
+        if self.repo.get_by_email(data.email):
+            raise ConflictError("Adresse e-mail déjà utilisée")
+        if self.repo.get_by_matricule(data.matricule):
+            raise ConflictError("Matricule déjà existant")
         student = self.repo.create_student(data, hash_password(data.password))
         self.db.commit()
         self.db.refresh(student)
@@ -43,6 +47,8 @@ class UserService:
     def create_teacher(self, data: TeacherCreate) -> Teacher:
         if self.repo.get_by_username(data.username):
             raise ConflictError("Nom d'utilisateur déjà utilisé")
+        if self.repo.get_by_email(data.email):
+            raise ConflictError("Adresse e-mail déjà utilisée")
         teacher = self.repo.create_teacher(data, hash_password(data.password))
         self.db.commit()
         self.db.refresh(teacher)

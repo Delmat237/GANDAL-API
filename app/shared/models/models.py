@@ -120,6 +120,7 @@ class RCreateVM(Requete):
     id = Column(Integer, ForeignKey("requetes.id"), primary_key=True)
     size_rom = Column(Integer, nullable=False)
     size_ram = Column(Integer, nullable=False)
+    n_cpu = Column(Integer, nullable=False, default=2, server_default="2")
     os = Column(String(100), nullable=False)
 
     __mapper_args__ = {

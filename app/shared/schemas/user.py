@@ -1,6 +1,11 @@
 from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Literal, Optional
 
+# Valeurs de rôle autorisées pour un enseignant. Doit rester aligné avec
+# AuthorizationPolicy (app/shared/policies/permissions.py) qui s'appuie sur
+# "Admin"/"SuperAdmin" pour les droits d'administration.
+TeacherRole = Literal["Teacher", "Admin", "SuperAdmin"]
+
 
 class UserBase(BaseModel):
     username: str
@@ -37,13 +42,13 @@ class StudentRead(UserBase):
 
 class TeacherCreate(UserBase):
     password: str
-    role: str
+    role: TeacherRole = "Teacher"
 
 
 class TeacherUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
-    role: Optional[str] = None
+    role: Optional[TeacherRole] = None
 
 
 class TeacherRead(UserBase):

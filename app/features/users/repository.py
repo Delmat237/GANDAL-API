@@ -15,6 +15,14 @@ class UserRepository:
     def get_by_username(self, username: str) -> User | None:
         return self.db.execute(select(User).where(User.username == username)).scalar_one_or_none()
 
+    def get_by_email(self, email: str) -> User | None:
+        return self.db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+
+    def get_by_matricule(self, matricule: str) -> Student | None:
+        return self.db.execute(
+            select(Student).where(Student.matricule == matricule)
+        ).scalar_one_or_none()
+
     def get_by_username_or_email(self, identifier: str) -> User | None:
         return self.db.execute(
             select(User).where(

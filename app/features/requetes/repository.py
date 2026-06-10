@@ -47,6 +47,7 @@ class RequeteRepository:
             teacher_id=data.teacher_id,
             size_rom=data.size_rom,
             size_ram=data.size_ram,
+            n_cpu=data.n_cpu,
             os=data.os,
         )
         self.db.add(req)
