@@ -14,6 +14,7 @@ from app.features.vms.service import VMService
 from app.infrastructure import factories
 from app.infrastructure.proxmox.constants import resolve_template_for_os, resolve_vlan_for_department
 from app.infrastructure.proxmox.proxmox_client import ProxmoxIntegrationError
+from app.infrastructure.proxmox.ssh_keys import resolve_ssh_public_key
 from app.shared.models import RAccount, RCreateVM, RDeleteVM, Requete, Student, User, VM
 from app.shared.policies.permissions import AuthorizationPolicy
 from app.shared.policies.states import RequestStatePolicy, StateTransitionError, VMStatePolicy
@@ -111,8 +112,7 @@ class RequeteService:
             create_req = self.db.get(RCreateVM, requete_id)
             if create_req is None:
                 raise NotFoundError("Requête create-vm introuvable")
-            self._approve_create_vm(
-                create_req, ssh_public_key or "ssh-rsa mock")
+            self._approve_create_vm(create_req, ssh_public_key)
         elif requete.type == "r_delete_vm":
             delete_req = self.db.get(RDeleteVM, requete_id)
             if delete_req is None:
@@ -148,6 +148,13 @@ class RequeteService:
         if student is None:
             raise NotFoundError("Étudiant introuvable")
 
+        resolved = resolve_ssh_public_key(ssh_public_key)
+        if resolved.was_generated:
+            logger.info(
+                "Clé SSH invalide ou absente pour la requête %s ; génération d'une paire Ed25519.",
+                requete.id,
+            )
+
         n_cpu = requete.n_cpu or 2
         proxmox_vmid: int | None = None
         node: str | None = None
@@ -163,7 +170,7 @@ class RequeteService:
                     template_vmid=template,
                     ram_gb=float(requete.size_ram),
                     vcpu=n_cpu,
-                    ssh_pub_key=ssh_public_key,
+                    ssh_pub_key=resolved.public_key,
                     vlan_id=vlan,
                 )
                 proxmox_vmid = result.vmid
@@ -187,10 +194,23 @@ class RequeteService:
             id_proxmox=proxmox_vmid,
             node=node,
             status=status,
-            ssh_public_key=ssh_public_key,
+            ssh_public_key=resolved.public_key,
             user_id=student.id,
         )
         self.db.add(vm)
+
+        if resolved.was_generated and resolved.private_key and student.email:
+            self.email.send_request_status_email(
+                student.email,
+                "Clé SSH pour votre VM GANDAL",
+                (
+                    "Votre requête de VM a été approuvée. Aucune clé SSH valide "
+                    "n'avait été fournie : une paire Ed25519 a été générée.\n\n"
+                    "Conservez cette clé privée pour vous connecter à la VM "
+                    "(chmod 600) :\n\n"
+                    f"{resolved.private_key}\n"
+                ),
+            )
 
     def _approve_delete_vm(self, requete: RDeleteVM) -> None:
         vm = self.vm_repo.get(requete.vm_id)
