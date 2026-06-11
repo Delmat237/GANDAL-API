@@ -1,0 +1,489 @@
+\documentclass[11pt,a4paper]{article}
+
+% ------------------------------------------------------------------ Encodage
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+
+% --------------------------------------------------------------------- Mise en page
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------------- Couleurs
+\definecolor{primary}{HTML}{1F4E79}
+\definecolor{accent}{HTML}{2E75B6}
+\definecolor{ok}{HTML}{1E7D32}
+\definecolor{warn}{HTML}{C77700}
+\definecolor{danger}{HTML}{B3261E}
+\definecolor{codebg}{HTML}{F4F6F8}
+\definecolor{rule}{HTML}{C9D6E2}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=primary,
+  urlcolor=accent,
+  pdftitle={Rapport de deploiement - GANDAL-API},
+  pdfauthor={Delmat237}
+}
+
+% ------------------------------------------------------------------ En-tete / pied
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+\fancyhead[L]{\small\textcolor{primary}{\textbf{GANDAL-API}} -- Rapport de déploiement}
+\fancyhead[R]{\small 11 juin 2026}
+\fancyfoot[L]{\small\textit{Document confidentiel}}
+\fancyfoot[R]{\small Page \thepage}
+
+% ----------------------------------------------------------------- Titres de section
+\titleformat{\section}
+  {\color{primary}\Large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\color{accent}\large\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.4em}{0.7em}
+
+% --------------------------------------------------------------------- Listings
+\lstdefinestyle{cmd}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{rule},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=0.5em,
+  framesep=6pt,
+  aboveskip=1em,
+  belowskip=1em
+}
+\lstset{style=cmd}
+
+% --------------------------------------------------------------------- Macros
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\ok}{\textcolor{ok}{\textbf{OK}}}
+\newcommand{\statusbadge}[2]{\colorbox{#1}{\textcolor{white}{\textbf{\,#2\,}}}}
+
+\setlist{topsep=2pt,itemsep=1pt}
+\renewcommand{\arraystretch}{1.25}
+
+% =====================================================================
+\begin{document}
+
+% --------------------------------------------------------------- Page de titre
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+
+{\color{rule}\rule{\linewidth}{1.2pt}}\\[0.6cm]
+{\color{primary}\Huge\bfseries Rapport de déploiement}\\[0.45cm]
+{\LARGE GANDAL-API \textnormal{(\code{dc-backend})}}\\[0.35cm]
+{\large\itshape API de gestion de VMs pédagogiques, requêtes et publications}\\[0.5cm]
+{\color{rule}\rule{\linewidth}{1.2pt}}\\[1.2cm]
+
+\statusbadge{ok}{EN PRODUCTION -- OPÉRATIONNEL ET VALIDÉ}\\[1.6cm]
+
+\begin{tabular}{@{}r l@{}}
+\textbf{Projet} & dc-backend (\href{https://github.com/Delmat237/GANDAL-API}{github.com/Delmat237/GANDAL-API})\\
+\textbf{Version} & commit \code{1a48612} -- branche \code{master}\\
+\textbf{Serveur cible} & \code{omega-test-3001} -- \code{10.50.30.102}\\
+\textbf{Type} & Conteneurisé (Docker Compose), en isolation\\
+\textbf{Auteur} & Delmat237\\
+\textbf{Date} & 11 juin 2026\\
+\end{tabular}
+
+\vfill
+{\small\color{primary}Document technique d'ingénierie -- diffusion restreinte}
+\end{titlepage}
+
+% --------------------------------------------------------------- Sommaire
+\tableofcontents
+\thispagestyle{fancy}
+\newpage
+
+% =====================================================================
+\section{Résumé exécutif}
+
+L'API GANDAL a été déployée avec succès sur le serveur \code{10.50.30.102} sous forme
+de \emph{stack} Docker Compose isolée, \textbf{sans aucun impact} sur les applications
+tierces déjà hébergées sur la machine (\emph{stacks} \code{iwm-*}, \code{erp-cashier-*},
+\code{verifid}).
+
+La solution expose l'API selon deux canaux complémentaires :
+\begin{enumerate}
+  \item \textbf{Reverse-proxy mutualisé} (nginx \code{iwm-gateway}, port 80) -- accès
+        nominal de production via le sous-domaine \code{gandal.10.50.30.102.nip.io} ;
+  \item \textbf{Port hôte direct} \code{8000} -- accès de diagnostic.
+\end{enumerate}
+
+L'ensemble de la chaîne a été vérifié de bout en bout : démarrage des conteneurs,
+exécution des migrations de base de données, points de santé applicatifs, routage du
+reverse-proxy, création du compte d'administration et authentification.
+\textbf{Tous les tests de recette sont au vert.}
+
+% =====================================================================
+\section{Contexte et objectifs}
+
+\begin{tabularx}{\linewidth}{@{}X c@{}}
+\toprule
+\textbf{Objectif} & \textbf{Atteint} \\
+\midrule
+Déployer l'API sur \code{root@10.50.30.102} & \ok \\
+Ne pas perturber les services existants du serveur & \ok \\
+Exposer l'API derrière le reverse-proxy nginx existant & \ok \\
+Sécuriser les secrets de production (JWT, mot de passe admin, base) & \ok \\
+Disposer d'un compte administrateur fonctionnel & \ok \\
+\bottomrule
+\end{tabularx}
+
+% =====================================================================
+\section{Environnement cible}
+
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Élément} & \textbf{Valeur} \\
+\midrule
+Hôte & \code{omega-test-3001} \\
+Adresse IP & \code{10.50.30.102} \\
+Système & Debian GNU/Linux 12 (bookworm) \\
+Noyau & \code{6.1.0-49-cloud-amd64} \\
+Moteur de conteneurs & Docker \code{29.5.3} \\
+Orchestration & Docker Compose \code{v5.1.4} (plugin) \\
+Stockage racine & 20 Go ($\approx$ 87 \% utilisés après déploiement) \\
+Répertoire applicatif & \code{/gandal-dev} \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\noindent\textbf{Note environnement partagé.} Le serveur héberge plusieurs \emph{stacks}
+indépendantes (\code{iwm-app}, \code{iwm-postgres}, \code{iwm-kafka},
+\code{iwm-elasticsearch}, \code{iwm-redis}, \code{erp-cashier-backend},
+\code{erp-cashier-frontend}, \code{verifid-backend}, reverse-proxy \code{iwm-gateway}).
+Le déploiement a été conduit en stricte isolation.
+
+% =====================================================================
+\section{Architecture de la solution déployée}
+
+\begin{lstlisting}
+                         Internet / LAN
+                               |
+              http://gandal.10.50.30.102.nip.io   (port 80)
+                               |
+                 +-------------v--------------+
+                 |   nginx  "iwm-gateway"     |  (reverse-proxy mutualise)
+                 |  routage par sous-domaine  |
+                 |  map $host $svc {          |
+                 |    ~^gandal\. -> gandal-api |  <- entree ajoutee
+                 |    ~^api\.    -> iwm-app     |
+                 |    ~^caisse\. -> ...         |
+                 |  }                          |
+                 +-------------+--------------+
+                               | reseau Docker "iwm-vm-network"
+                               |
+            +------------------v-------------------+
+            |  Stack Compose  "gandal"             |
+            |                                       |
+            |  +---------------+   +--------------+ |
+   :8000 ---+->|  gandal-api   |-->|   gandal-db  | |
+  (acces    |  |  FastAPI      |   | postgres:17  | |
+  direct)   |  |  172.18.0.10  |   |  (healthy)   | |
+            |  +---------------+   +------+-------+ |
+            |      reseau "gandal-net"    |        |
+            |                      volume gandal_pgdata
+            +---------------------------------------+
+\end{lstlisting}
+
+\subsection*{Inventaire des conteneurs déployés}
+
+\begin{tabularx}{\linewidth}{@{}l l c X c@{}}
+\toprule
+\textbf{Conteneur} & \textbf{Image} & \textbf{Taille} & \textbf{Réseaux} & \textbf{Statut} \\
+\midrule
+\code{gandal-api} & build local & 311 Mo & \code{gandal-net}, \code{iwm-vm-network} & Up \\
+\code{gandal-db} & \code{postgres:17-alpine} & 400 Mo & \code{gandal-net} & Up (healthy) \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\noindent\textbf{Persistance} : volume Docker nommé \code{gandal\_pgdata} (données
+PostgreSQL).
+
+% =====================================================================
+\section{Procédure de déploiement réalisée}
+
+\begin{enumerate}[label=\textbf{\arabic*.}]
+  \item \textbf{Audit préalable du serveur} -- vérification de l'accès SSH, de la
+        présence de Docker / Compose, des ports hôtes disponibles (80 occupé par le
+        gateway ; 8000 et 5433 libres) et de l'absence d'un déploiement antérieur.
+  \item \textbf{Analyse du reverse-proxy existant} -- identification du mécanisme de
+        routage par sous-domaine (\code{map \$host \$svc}) et de la résolution DNS
+        Docker sur le réseau \code{iwm-vm-network}.
+  \item \textbf{Transfert du code} -- synchronisation du dépôt local vers
+        \code{/gandal-dev} via \code{rsync} (exclusions : \code{.git/}, \code{.venv/},
+        caches, \code{docs/}, \code{.env}).
+  \item \textbf{Génération des secrets de production} -- JWT, clé secrète SuperAdmin,
+        mot de passe PostgreSQL et mot de passe administrateur (valeurs fortes
+        aléatoires).
+  \item \textbf{Définition de la \emph{stack} de production} -- fichier
+        \code{docker-compose.prod.yml} dédié (projet \code{gandal}, conteneurs nommés,
+        raccordement au réseau du gateway, volume persistant, sondes de santé).
+  \item \textbf{Construction et démarrage} -- \code{docker compose up -d -{}-build} ;
+        les migrations Alembic (\code{alembic upgrade head}) s'exécutent automatiquement
+        au démarrage du conteneur API.
+  \item \textbf{Intégration au reverse-proxy} -- ajout d'une entrée de routage
+        \code{gandal.} dans \code{/root/iwm/ops/nginx/gateway.conf} (avec sauvegarde
+        préalable), validation \code{nginx -t} puis rechargement à chaud
+        \code{nginx -s reload}.
+  \item \textbf{Bootstrap applicatif} -- création du compte SuperAdmin via
+        \code{POST /api/v1/auth/register-admin}.
+  \item \textbf{Recette} -- validation des points de santé, du routage et de
+        l'authentification.
+\end{enumerate}
+
+% =====================================================================
+\section{Configuration}
+
+\subsection{Stack Docker Compose}
+
+Caractéristiques notables de \code{/gandal-dev/docker-compose.prod.yml} :
+\begin{itemize}
+  \item \code{name: gandal} -- projet Compose isolé ;
+  \item conteneurs nommés explicitement (\code{gandal-api}, \code{gandal-db}) pour la
+        résolution DNS par le reverse-proxy ;
+  \item \code{restart: unless-stopped} -- redémarrage automatique des services ;
+  \item sonde de santé PostgreSQL (\code{pg\_isready}) ; l'API ne démarre qu'une fois la
+        base \code{healthy} (\code{depends\_on: condition: service\_healthy}) ;
+  \item raccordement de \code{gandal-api} au réseau externe \code{iwm-vm-network} du
+        gateway \textbf{et} à un réseau privé \code{gandal-net} ;
+  \item publication de l'API sur \code{0.0.0.0:8000} (accès direct de diagnostic).
+\end{itemize}
+
+\subsection{Variables d'environnement (\code{.env})}
+
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Variable} & \textbf{Valeur de production} \\
+\midrule
+\code{ENVIRONMENT} & \code{production} \\
+\code{DATABASE\_URL} & \code{postgresql://dc:***@db:5432/dc\_backend} \\
+\code{JWT\_SECRET} & secret fort généré \textit{(masqué)} \\
+\code{SUPERADMIN\_USERNAME} & \code{admin} \\
+\code{SUPERADMIN\_EMAIL} & \code{admin@enspy-gi.cm} \\
+\code{SUPERADMIN\_PASSWORD} & secret fort généré \textit{(transmis séparément)} \\
+\code{SUPERADMIN\_SECRET\_KEY} & secret fort généré \textit{(masqué)} \\
+\code{PROXMOX\_ENABLED} & \code{false} (mode simulation) \\
+\code{EMAIL\_BACKEND} & \code{log} \\
+\code{CORS\_ORIGINS} & origines \code{localhost} de développement \\
+\bottomrule
+\end{tabularx}
+
+% =====================================================================
+\section{Intégration au reverse-proxy nginx}
+
+Une seule ligne a été ajoutée à la table de routage du gateway mutualisé,
+\code{/root/iwm/ops/nginx/gateway.conf} :
+
+\begin{lstlisting}[language=]
+map $host $svc {
+      default               "";
+      "~^gandal\."          "gandal-api:8000";   # <- ajout GANDAL
+      "~^api-caisse\."      "erp-cashier-backend:8081";
+      "~^api\."             "iwm-app:8080";
+      "~^verifid\."         "verifid-backend:8080";
+      "~^caisse\."          "erp-cashier-frontend:3000";
+}
+\end{lstlisting}
+
+\begin{itemize}
+  \item \textbf{Sauvegarde} : une copie horodatée \code{gateway.conf.bak.<timestamp>} a
+        été créée avant modification ;
+  \item \textbf{Validation} : \code{nginx -t} $\rightarrow$ \emph{syntax is ok / test is
+        successful} ;
+  \item \textbf{Application} : rechargement à chaud (\code{nginx -s reload}), \textbf{sans
+        interruption} des autres services ;
+  \item \textbf{Non-régression} : un \code{Host} inconnu continue de renvoyer
+        \code{404 Unknown host}, confirmant que les routes existantes restent intactes.
+\end{itemize}
+
+% =====================================================================
+\section{Sécurité et gestion des secrets}
+
+\begin{itemize}
+  \item Tous les secrets de production ont été \textbf{régénérés} (aucune valeur
+        d'exemple \code{changeme123} / \code{change-me-*} conservée) ;
+  \item les secrets résident dans \code{/gandal-dev/.env} sur le serveur ; ce fichier
+        \textbf{n'est pas versionné} (exclu par \code{.gitignore} et du transfert
+        \code{rsync}) ;
+  \item le mot de passe administrateur a été communiqué \textbf{hors de ce document} ;
+  \item la base de données PostgreSQL n'est \textbf{pas exposée} sur l'hôte (port interne
+        au réseau Docker uniquement) ;
+  \item le compte d'administration est protégé par une clé secrète
+        (\code{SUPERADMIN\_SECRET\_KEY}) exigée à la création
+        (\code{secrets.compare\_digest}).
+\end{itemize}
+
+% =====================================================================
+\section{Recette -- tests de validation}
+
+\begin{longtable}{@{}c >{\raggedright\arraybackslash}p{0.42\linewidth} >{\raggedright\arraybackslash}p{0.30\linewidth} c@{}}
+\toprule
+\textbf{\#} & \textbf{Test} & \textbf{Résultat attendu} & \textbf{Statut} \\
+\midrule
+\endhead
+1 & Démarrage base (\code{gandal-db}) & \code{Up (healthy)} & \ok \\
+2 & Migrations Alembic & révisions \code{0001 -> 0003} & \ok \\
+3 & Démarrage API & \code{Application startup complete} & \ok \\
+4 & Santé -- \code{GET /health} & \code{\{"status":"ok"\}} & \ok \\
+5 & Disponibilité DB -- \code{GET /ready} & \code{database: true} & \ok \\
+6 & Routage gateway (Host \code{gandal.*}) & \code{\{"status":"ok"\}} & \ok \\
+7 & Non-régression (Host inconnu) & \code{404 Unknown host} & \ok \\
+8 & Documentation -- \code{GET /docs} & \code{HTTP 200} (Swagger) & \ok \\
+9 & Bootstrap admin -- \code{register-admin} & \code{HTTP 201} & \ok \\
+10 & Authentification -- \code{login} & \code{HTTP 200} + jeton JWT & \ok \\
+11 & Accès port direct \code{:8000/docs} & \code{HTTP 200} & \ok \\
+12 & Accès via nip.io \code{/docs} & \code{HTTP 200} & \ok \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\section{Accès à l'application}
+
+\begin{tabularx}{\linewidth}{@{}l X l@{}}
+\toprule
+\textbf{Canal} & \textbf{URL} & \textbf{Usage} \\
+\midrule
+Reverse-proxy (nominal) & \url{http://gandal.10.50.30.102.nip.io/} & Production \\
+Documentation & \url{http://gandal.10.50.30.102.nip.io/docs} & Production \\
+Port hôte direct & \url{http://10.50.30.102:8000/} & Diagnostic \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\noindent\textbf{Résolution DNS.} Le serveur s'appuie sur le service \emph{wildcard}
+\textbf{nip.io} : toute entrée \code{<préfixe>.10.50.30.102.nip.io} résout
+automatiquement vers \code{10.50.30.102}. Aucune configuration DNS supplémentaire n'est
+donc nécessaire. En cas de bascule ultérieure sur un nom de domaine réel, il suffira de
+pointer \code{gandal.<domaine>} (ou un enregistrement \emph{wildcard}) vers
+\code{10.50.30.102}, sans modification côté serveur.
+
+\medskip
+\noindent\textbf{Compte d'administration} : utilisateur \code{admin} (rôle
+\code{SuperAdmin}) -- mot de passe transmis séparément.
+
+% =====================================================================
+\section{Exploitation et maintenance}
+
+Toutes les opérations s'effectuent depuis \code{/gandal-dev} :
+
+\begin{lstlisting}[language=bash]
+ssh root@10.50.30.102
+cd /gandal-dev
+
+# Etat des services
+docker compose -f docker-compose.prod.yml ps
+
+# Journaux applicatifs (suivi)
+docker compose -f docker-compose.prod.yml logs -f api
+
+# Mise a jour (apres synchronisation d'une nouvelle version du code)
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Sauvegarde de la base de donnees
+docker exec gandal-db pg_dump -U dc dc_backend > backup_$(date +%F).sql
+\end{lstlisting}
+
+\noindent Un script de déploiement automatisé est fourni : \code{scripts/deploy.sh}
+(synchronisation \code{rsync} + reconstruction de l'image, avec gestion des coupures
+réseau).
+
+% =====================================================================
+\section{Incidents rencontrés et résolutions}
+
+\begin{longtable}{@{}p{0.30\linewidth} p{0.33\linewidth} p{0.30\linewidth}@{}}
+\toprule
+\textbf{Incident} & \textbf{Cause} & \textbf{Résolution} \\
+\midrule
+\endhead
+Coupures SSH intermittentes & Instabilité du lien réseau vers l'hôte & Encapsulation des
+commandes \code{ssh}/\code{scp} dans des boucles de réessai \\
+Échec de \code{docker pull} & Résolveur DNS du serveur (\code{10.50.30.1:53})
+intermittent & Réutilisation de l'image \code{postgres:17-alpine} déjà présente ; build
+relancé en boucle \\
+API non démarrée au 1\textsuperscript{er} essai & Base pas encore \code{healthy} & La
+boucle de réessai a relancé \code{up} ; succès au 2\textsuperscript{e} essai \\
+\code{register-admin} rejeté (422) & Domaine e-mail \code{.local} réservé & Adresse valide
+\code{admin@enspy-gi.cm} \\
+Build long interrompu & Lien réseau instable & Build exécuté \textbf{détaché}
+(\code{nohup}), survivant aux ruptures de session \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\section{Risques résiduels et recommandations}
+
+\begin{longtable}{@{}c >{\raggedright\arraybackslash}p{0.84\linewidth}@{}}
+\toprule
+\textbf{Priorité} & \textbf{Recommandation} \\
+\midrule
+\endhead
+\textcolor{danger}{\textbf{Haute}} & \textbf{Activer HTTPS/TLS} sur le gateway
+(certificat Let's Encrypt) -- le trafic transite actuellement en clair sur le port 80. \\
+\textcolor{warn}{\textbf{Moyenne}} & \textbf{Restreindre ou fermer le port 8000 direct}
+une fois la phase de diagnostic terminée. \\
+\textcolor{warn}{\textbf{Moyenne}} & \textbf{Affiner \code{CORS\_ORIGINS}} avec l'origine
+réelle du frontend de production. \\
+\textcolor{warn}{\textbf{Moyenne}} & \textbf{Sauvegarde automatisée} du volume
+\code{gandal\_pgdata} (cron \code{pg\_dump} + externalisation). \\
+\textcolor{ok}{\textbf{Basse}} & \textbf{Surveiller l'espace disque} (87 \% utilisés) --
+\code{docker system prune} régulier. \\
+\textcolor{ok}{\textbf{Basse}} & \textbf{Stabiliser la résolution DNS} du serveur pour
+fiabiliser les futurs \code{docker pull}. \\
+\textcolor{ok}{\textbf{Basse}} & \textbf{Configurer le backend e-mail SMTP} si l'envoi de
+notifications réelles est requis. \\
+\textcolor{ok}{\textbf{Basse}} & \textbf{Connecter Proxmox} lorsque l'hyperviseur sera
+joignable (actuellement en mode simulation). \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\section{Annexes}
+
+\textbf{Fichiers livrés sur le serveur} (\code{/gandal-dev/})
+\begin{itemize}
+  \item Code applicatif (synchronisé depuis le dépôt) ;
+  \item \code{docker-compose.prod.yml} -- définition de la \emph{stack} de production ;
+  \item \code{.env} -- variables d'environnement et secrets (non versionné).
+\end{itemize}
+
+\noindent\textbf{Fichier modifié sur le serveur}
+\begin{itemize}
+  \item \code{/root/iwm/ops/nginx/gateway.conf} -- ajout de la route \code{gandal.}
+        (sauvegarde \code{.bak.<timestamp>} conservée).
+\end{itemize}
+
+\noindent\textbf{Références}
+\begin{itemize}
+  \item Dépôt : \url{https://github.com/Delmat237/GANDAL-API} ;
+  \item Documentation API (Swagger) : \code{/docs} -- Redoc : \code{/redoc} ;
+  \item Points de santé : \code{/health}, \code{/ready}.
+\end{itemize}
+
+\vspace{1.5cm}
+\begin{center}
+{\color{rule}\rule{0.5\linewidth}{0.6pt}}\\[0.3cm]
+\textit{Rapport établi le 11 juin 2026 -- déploiement réalisé et validé.}
+\end{center}
+
+\end{document}
