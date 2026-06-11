@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # Délai max (secondes) d'attente de la fin de la tâche de clonage avant
     # d'appliquer la configuration de la VM.
     proxmox_clone_timeout: int = 300
+    # Délai max (secondes) pour récupérer l'IP via qemu-guest-agent après démarrage.
+    proxmox_ip_poll_timeout: int = 45
 
     email_backend: Literal["log", "smtp"] = "log"
     smtp_host: str = "localhost"

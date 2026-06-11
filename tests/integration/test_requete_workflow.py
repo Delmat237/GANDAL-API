@@ -33,6 +33,9 @@ def test_create_and_approve_vm_request(client, seed_users, mock_proxmox):
     r = client.get("/api/v1/vms", headers=student_headers)
     assert r.status_code == 200
     assert r.json()["total"] >= 1
+    vm = r.json()["items"][0]
+    assert vm["name"] == "VM projet"
+    assert vm["ip_address"] == "10.0.0.42"
 
 
 def test_approve_vm_request_survives_proxmox_failure(

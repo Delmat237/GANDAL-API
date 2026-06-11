@@ -73,6 +73,9 @@ class VMService:
         if vm.id_proxmox and vm.node:
             if target == VMStatePolicy.UP:
                 self.proxmox.start_vm(vm.node, vm.id_proxmox)
+                ip = self.proxmox.get_vm_ip(vm.node, vm.id_proxmox)
+                if ip:
+                    vm.ip_address = ip
             elif target == VMStatePolicy.STOPPED:
                 self.proxmox.stop_vm(vm.node, vm.id_proxmox)
 

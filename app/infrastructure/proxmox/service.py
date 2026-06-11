@@ -44,7 +44,10 @@ class VMService:
                 ssh_key=ssh_pub_key,
             )
             self.client.start_vm(node, new_vmid)
-            return ProvisionResult(vmid=new_vmid, name=name, node=node, status="up")
+            ip_address = self.client.get_vm_ip_address(node, new_vmid)
+            return ProvisionResult(
+                vmid=new_vmid, name=name, node=node, status="up", ip_address=ip_address,
+            )
         except ProxmoxIntegrationError:
             logger.exception("Failed to provision VM %s", name)
             raise

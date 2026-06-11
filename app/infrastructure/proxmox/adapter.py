@@ -37,3 +37,6 @@ class ProxmoxGatewayAdapter:
 
     def get_vm_status(self, node: str, vmid: int) -> dict:
         return self._service.client.get_vm_status(node, vmid)
+
+    def get_vm_ip(self, node: str, vmid: int) -> str | None:
+        return self._service.client.get_vm_ip_address(node, vmid)

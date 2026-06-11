@@ -6,6 +6,7 @@ VMStatus = Literal["up", "waiting", "stopped"]
 
 
 class VMBase(BaseModel):
+    name: Optional[str] = None
     size_rom: int
     size_ram: int
     n_cpu: int
@@ -23,6 +24,7 @@ class VMCreate(VMBase):
 
 
 class VMUpdate(BaseModel):
+    name: Optional[str] = None
     size_rom: Optional[int] = None
     size_ram: Optional[int] = None
     n_cpu: Optional[int] = None

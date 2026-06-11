@@ -8,6 +8,7 @@ class ProvisionResult:
     name: str
     node: str
     status: str
+    ip_address: str | None = None
 
 
 class ProxmoxGateway(Protocol):
@@ -28,3 +29,5 @@ class ProxmoxGateway(Protocol):
     def destroy_vm(self, vmid: int) -> None: ...
 
     def get_vm_status(self, node: str, vmid: int) -> dict: ...
+
+    def get_vm_ip(self, node: str, vmid: int) -> str | None: ...

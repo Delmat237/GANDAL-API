@@ -158,15 +158,16 @@ class RequeteService:
         n_cpu = requete.n_cpu or 2
         proxmox_vmid: int | None = None
         node: str | None = None
+        ip_address: str | None = None
         status = VMStatePolicy.WAITING
 
         if not get_settings().proxmox_simulation_mode:
             template = resolve_template_for_os(requete.os)
             vlan = resolve_vlan_for_department(student.departement)
-            name = f"vm-{student.matricule}-{requete.id}"
+            proxmox_name = f"vm-{student.matricule}-{requete.id}"
             try:
                 result = self.proxmox.provision_new_vm(
-                    name=name,
+                    name=proxmox_name,
                     template_vmid=template,
                     ram_gb=float(requete.size_ram),
                     vcpu=n_cpu,
@@ -175,6 +176,7 @@ class RequeteService:
                 )
                 proxmox_vmid = result.vmid
                 node = result.node
+                ip_address = result.ip_address
                 status = VMStatePolicy.UP
             except ProxmoxIntegrationError:
                 # Proxmox injoignable : on n'échoue pas l'approbation. La VM est
@@ -186,6 +188,7 @@ class RequeteService:
                 )
 
         vm = VM(
+            name=requete.object,
             size_rom=requete.size_rom,
             size_ram=requete.size_ram,
             n_cpu=n_cpu,
@@ -193,6 +196,7 @@ class RequeteService:
             iso_image=requete.os,
             id_proxmox=proxmox_vmid,
             node=node,
+            ip_address=ip_address,
             status=status,
             ssh_public_key=resolved.public_key,
             user_id=student.id,

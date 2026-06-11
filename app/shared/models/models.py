@@ -64,6 +64,7 @@ class VM(Base):
     __tablename__ = "vms"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255))
     size_rom = Column(Integer, nullable=False)
     size_ram = Column(Integer, nullable=False)
     iso = Column(String(255))

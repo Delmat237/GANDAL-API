@@ -5,6 +5,7 @@ from urllib.parse import quote
 from proxmoxer import ProxmoxAPI
 
 from app.core.config import get_settings
+from app.infrastructure.proxmox.ip_utils import pick_guest_ipv4
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,6 +103,23 @@ class ProxmoxClient:
             time.sleep(2)
         raise ProxmoxIntegrationError(
             f"Délai dépassé en attendant la tâche Proxmox {upid}", 504)
+
+    def get_vm_ip_address(self, node: str, vmid: int, timeout: int | None = None) -> str | None:
+        """Interroge qemu-guest-agent jusqu'à obtenir une IPv4 (DHCP/cloud-init)."""
+        if not self.enabled or self.api is None:
+            return None
+        poll_timeout = timeout if timeout is not None else settings.proxmox_ip_poll_timeout
+        deadline = time.monotonic() + poll_timeout
+        while time.monotonic() < deadline:
+            try:
+                data = self.api.nodes(node).qemu(vmid).agent("network-get-interfaces").get()
+                ip = pick_guest_ipv4(data.get("result") or [])
+                if ip:
+                    return ip
+            except Exception:
+                pass
+            time.sleep(3)
+        return None
 
     def start_vm(self, node: str, vmid: int) -> None:
         if not self.enabled or self.api is None:

@@ -34,8 +34,10 @@ class MockProxmoxGateway:
         vmid = self._next_vmid
         self._next_vmid += 1
         node = "pve-mock"
-        self.vms[vmid] = {"name": name, "status": "up", "node": node}
-        return ProvisionResult(vmid=vmid, name=name, node=node, status="up")
+        self.vms[vmid] = {"name": name, "status": "up", "node": node, "ip": "10.0.0.42"}
+        return ProvisionResult(
+            vmid=vmid, name=name, node=node, status="up", ip_address="10.0.0.42",
+        )
 
     def start_vm(self, node: str, vmid: int) -> None:
         self._record("start_vm", node=node, vmid=vmid)
@@ -55,3 +57,8 @@ class MockProxmoxGateway:
         self._record("get_vm_status", node=node, vmid=vmid)
         vm = self.vms.get(vmid, {"status": "stopped"})
         return {"status": vm.get("status", "stopped")}
+
+    def get_vm_ip(self, node: str, vmid: int) -> str | None:
+        self._record("get_vm_ip", node=node, vmid=vmid)
+        vm = self.vms.get(vmid, {})
+        return vm.get("ip")
