@@ -100,7 +100,7 @@
 \textbf{Version} & commit \code{1a48612} -- branche \code{master}\\
 \textbf{Serveur cible} & \code{omega-test-3001} -- \code{10.50.30.102}\\
 \textbf{Type} & Conteneurisé (Docker Compose), en isolation\\
-\textbf{Auteur} & Delmat237\\
+\textbf{Auteur} & Cellule DevOps\\
 \textbf{Date} & 11 juin 2026\\
 \end{tabular}
 
@@ -358,6 +358,143 @@ map $host $svc {
 \bottomrule
 \end{longtable}
 
+\newpage{}
+% =====================================================================
+\section{Branchement de l'hyperviseur Proxmox (intégration réelle)}
+
+Au-delà du \emph{mode simulation} utilisé pour la mise en production initiale, le module
+d'intégration Proxmox de GANDAL a été \textbf{raccordé et validé contre un cluster
+Proxmox réel}. Cette section documente le branchement, les ajustements de code rendus
+nécessaires par le comportement réel de l'API, et le test de clonage de bout en bout.
+
+\subsection{Topologie du cluster cible}
+
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Élément} & \textbf{Valeur} \\
+\midrule
+Hyperviseur & Proxmox VE \code{9.2.2} (cluster à 7 nœuds) \\
+Nœud d'API / hôte & \code{emilia} -- \code{192.168.123.100:8006} \\
+Autres nœuds & \code{ram} (.101), \code{rem} (.102), \code{BLADE} (.103),
+\code{gandal} (.104), \code{GENESIS} (.105), \code{Bris} (.106) \\
+Nœud de provisionnement & \code{emilia} (templates locaux, clonage local fiable) \\
+Templates disponibles & \code{2299} (\code{omega-cloud-template}, cloud-init),
+\code{9001} (\code{omega-template-base}) \\
+Stockages & \code{stockage.ceph} (RBD partagé, 3{,}4 To), \code{local-lvm} (337 Go) \\
+Pont réseau (emilia) & \code{vmbr2} \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\noindent\textbf{Choix du nœud.} Le proxy inter-nœuds \emph{depuis} \code{emilia} renvoie
+une erreur \code{596 (Broken pipe)} ; le nœud \code{emilia} a donc été retenu comme cible
+de provisionnement, les templates y résidant localement (clonage sans proxy). Le cluster
+comporte par ailleurs un nœud nommé \code{gandal} (\code{192.168.123.104}), utilisable
+ultérieurement en pointant directement son IP et en s'appuyant sur le stockage \code{ceph}
+partagé.
+
+\subsection{Génération du jeton API et configuration}
+
+Un jeton d'API dédié a été généré sur \code{192.168.123.100} pour l'utilisateur
+\code{root@pam} :
+\begin{itemize}
+  \item identifiant de jeton : \code{root@pam!gandal} ;
+  \item \code{privsep=0} -- le jeton hérite des privilèges complets (clone, configuration,
+        démarrage, suppression) ;
+  \item le secret n'est affiché qu'une seule fois à la création ; il est stocké dans
+        \code{/.env} \textbf{non versionné} (exclu par \code{.gitignore}).
+\end{itemize}
+
+\noindent Variables \code{.env} correspondantes (secret masqué) :
+
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Variable} & \textbf{Valeur} \\
+\midrule
+\code{PROXMOX\_ENABLED} & \code{true} \\
+\code{PROXMOX\_HOST} & \code{192.168.123.100} \\
+\code{PROXMOX\_USER} & \code{root@pam} \\
+\code{PROXMOX\_TOKEN\_ID} & \code{gandal} \\
+\code{PROXMOX\_TOKEN\_SECRET} & \textit{(secret masqué -- transmis séparément)} \\
+\code{PROXMOX\_DEFAULT\_NODE} & \code{emilia} \\
+\code{PROXMOX\_VM\_STORAGE} & \code{local-lvm} \\
+\code{PROXMOX\_NET0\_TEMPLATE} & \code{virtio,bridge=vmbr2} \\
+\code{PROXMOX\_VMID\_RANGE\_START} / \code{\_END} & \code{2400} / \code{2499} \\
+\code{PROXMOX\_CLONE\_FULL} & \code{false} (clone lié) \\
+\code{PROXMOX\_CLONE\_TIMEOUT} & \code{300} (secondes) \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Plage de VMID dédiée}
+
+Une plage \textbf{\code{2400--2499}} a été réservée à GANDAL et vérifiée \textbf{entièrement
+libre}. Elle évite toute collision avec les VMs existantes du cluster (gabarits
+\code{2299}, flotte \code{omega} en \code{2300+} et \code{3000+}, services en \code{100+}).
+La méthode \code{get\_next\_vmid()} alloue désormais le premier identifiant libre
+\emph{dans cette plage} (au lieu de \code{cluster/nextid} global).
+
+\subsection{Ajustements apportés au client Proxmox}
+
+Le comportement réel de l'API a révélé plusieurs écarts par rapport à l'implémentation
+initiale, tous corrigés dans \code{app/infrastructure/proxmox/proxmox\_client.py} :
+
+\begin{longtable}{@{}p{0.30\linewidth} p{0.62\linewidth}@{}}
+\toprule
+\textbf{Ajustement} & \textbf{Motif / comportement réel} \\
+\midrule
+\endhead
+Attente de fin de tâche de clonage & Le clonage est asynchrone (UPID) ; la VM reste
+\emph{verrouillée} (\code{lock=clone}) pendant la copie. Le code attend désormais la fin
+de la tâche avant de configurer. \\
+Clone lié par défaut (\code{full=0}) & Un clone \emph{complet} de \code{ceph} vers
+\code{local-lvm} (disque 20 Go) dépassait 5 minutes ; le clone lié s'effectue en quelques
+secondes (disque conservé sur le \code{ceph} partagé). \\
+Clé SSH URL-encodée & Sans encodage, l'API rejette le champ (\code{invalid urlencoded
+string}). La clé est désormais encodée via \code{urllib.parse.quote}. \\
+Configuration via \code{PUT} & Sur une VM fraîchement clonée, \code{POST .../config}
+plaçait les paramètres matériels (RAM, vCPU, réseau) en \emph{pending} sans les appliquer ;
+le \code{PUT} synchrone les applique immédiatement. \\
+Suppression robuste & \code{delete\_vm} attend l'arrêt effectif de la VM (l'arrêt étant
+asynchrone) puis supprime avec \code{purge}, évitant l'erreur \code{VM is running}. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Test de clonage réel -- bout en bout}
+
+Un cycle de vie complet a été exécuté \textbf{via le client applicatif lui-même} (lecture
+du \code{.env}, jeton réel), puis la VM de test a été détruite :
+
+\begin{longtable}{@{}c >{\raggedright\arraybackslash}p{0.52\linewidth} >{\raggedright\arraybackslash}p{0.20\linewidth} c@{}}
+\toprule
+\textbf{\#} & \textbf{Étape} & \textbf{Résultat} & \textbf{Statut} \\
+\midrule
+\endhead
+1 & Connexion au cluster (jeton) & Proxmox VE \code{9.2.2} & \ok \\
+2 & Allocation VMID (\code{get\_next\_vmid}) & \code{2400} (dans la plage) & \ok \\
+3 & Clone lié du template \code{2299} & disque \code{vm-2400-disk-0} & \ok \\
+4 & Configuration appliquée (\code{PUT}) & \code{2048} Mo, \code{2} vCPU, \code{vmbr2},
+clé SSH & \ok \\
+5 & Démarrage (\code{start\_vm}) & \code{status=running} & \ok \\
+6 & Suppression (\code{delete\_vm}) & VM purgée, cluster propre & \ok \\
+\bottomrule
+\end{longtable}
+
+\noindent\textbf{Durée totale clone + configuration : $\approx$ 15 secondes.} L'ensemble de
+la suite de tests applicative (\code{pytest}) reste au vert (\textbf{102 tests}).
+
+\subsection{Activation en production}
+
+L'intégration a été développée et validée depuis le réseau de laboratoire
+(\code{192.168.123.0/24}). Pour l'activer sur le serveur de production
+(\code{10.50.30.102}), il suffit de :
+\begin{enumerate}
+  \item s'assurer que l'hôte de production atteint \code{192.168.123.100:8006} (routage /
+        pare-feu) ;
+  \item reporter les variables \code{PROXMOX\_*} ci-dessus dans le \code{.env} serveur ;
+  \item basculer \code{PROXMOX\_ENABLED=true} et \code{PROXMOX\_SIMULATION\_MODE=false}.
+\end{enumerate}
+\noindent Aucune autre modification de code n'est requise.
+
 % =====================================================================
 \section{Accès à l'application}
 
@@ -453,8 +590,9 @@ réelle du frontend de production. \\
 fiabiliser les futurs \code{docker pull}. \\
 \textcolor{ok}{\textbf{Basse}} & \textbf{Configurer le backend e-mail SMTP} si l'envoi de
 notifications réelles est requis. \\
-\textcolor{ok}{\textbf{Basse}} & \textbf{Connecter Proxmox} lorsque l'hyperviseur sera
-joignable (actuellement en mode simulation). \\
+\textcolor{ok}{\textbf{Basse}} & \textbf{Activer Proxmox en production} : l'intégration est
+désormais raccordée et validée contre le cluster réel (cf. \S\,10) ; il reste à ouvrir la
+route réseau prod $\rightarrow$ hyperviseur puis à basculer \code{PROXMOX\_ENABLED=true}. \\
 \bottomrule
 \end{longtable}
 

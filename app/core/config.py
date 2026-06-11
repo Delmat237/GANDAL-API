@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     proxmox_default_node: str = "pve"
     proxmox_vm_storage: str = "local-lvm"
     proxmox_net0_template: str = "virtio,bridge=vmbr0"
+    # Plage de VMID réservée à GANDAL pour ne pas entrer en collision avec les
+    # autres VMs du cluster. get_next_vmid() alloue le premier ID libre dans
+    # [start, end]. Si start/end valent 0, on retombe sur cluster/nextid.
+    proxmox_vmid_range_start: int = 2400
+    proxmox_vmid_range_end: int = 2499
+    # Clone complet (full=1, VM indépendante) ou clone lié (full=0, plus rapide
+    # mais dépend du template). Le clone lié ignore PROXMOX_VM_STORAGE.
+    proxmox_clone_full: bool = True
+    # Délai max (secondes) d'attente de la fin de la tâche de clonage avant
+    # d'appliquer la configuration de la VM.
+    proxmox_clone_timeout: int = 300
 
     email_backend: Literal["log", "smtp"] = "log"
     smtp_host: str = "localhost"
