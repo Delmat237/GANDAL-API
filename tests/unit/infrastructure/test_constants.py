@@ -11,10 +11,37 @@ def test_resolve_vlan_for_department_default():
     assert resolve_vlan_for_department("Unknown") == 100
 
 
-def test_resolve_template_for_os_valid():
-    assert resolve_template_for_os("Ubuntu 22.04") == 9000
+@pytest.mark.parametrize(
+    "os_name,expected_template",
+    [
+        ("Ubuntu", 9000),
+        ("ubuntu", 9000),
+        ("Ubuntu 22.04", 9000),
+        ("  ubuntu   22.04  ", 9000),
+        ("Debian", 9001),
+        ("debian", 9001),
+        ("Debian 12", 9001),
+        ("  debian   12  ", 9001),
+    ]
+)
+def test_resolve_template_for_os_valid(os_name, expected_template):
+    assert resolve_template_for_os(os_name) == expected_template
 
 
-def test_resolve_template_for_os_invalid():
-    with pytest.raises(ValueError):
-        resolve_template_for_os("Windows XP")
+@pytest.mark.parametrize(
+    "os_name",
+    [
+        "Windows",
+        "CentOS",
+        "unknown_os",
+        "",
+        None,
+    ]
+)
+def test_resolve_template_for_os_invalid(os_name):
+    with pytest.raises(ValueError) as exc_info:
+        resolve_template_for_os(os_name)
+    assert "OS non supporté" in str(exc_info.value)
+    assert "Ubuntu 22.04" in str(exc_info.value)
+    assert "Debian 12" in str(exc_info.value)
+
