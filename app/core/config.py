@@ -33,22 +33,22 @@ class Settings(BaseSettings):
     # en base avec le statut "waiting" sans appeler Proxmox. Utile lorsque
     # l'hyperviseur n'est pas joignable (ex. déploiement Render).
     proxmox_simulation_mode: bool = False
-    proxmox_host: str = "192.168.1.100"
+    proxmox_host: str = "192.168.123.100"
     proxmox_user: str = "root@pam"
     proxmox_token_id: str = ""
     proxmox_token_secret: str = ""
     proxmox_verify_ssl: bool = False
-    proxmox_default_node: str = "pve"
-    proxmox_vm_storage: str = "local-lvm"
-    proxmox_net0_template: str = "virtio,bridge=vmbr0"
+    proxmox_default_node: str = "emilia"
+    proxmox_vm_storage: str = "stockage.ceph"
+    proxmox_net0_template: str = "virtio,bridge=vmbr2"
     # Plage de VMID réservée à GANDAL pour ne pas entrer en collision avec les
     # autres VMs du cluster. get_next_vmid() alloue le premier ID libre dans
     # [start, end]. Si start/end valent 0, on retombe sur cluster/nextid.
     proxmox_vmid_range_start: int = 2400
     proxmox_vmid_range_end: int = 2499
-    # Clone complet (full=1, VM indépendante) ou clone lié (full=0, plus rapide
-    # mais dépend du template). Le clone lié ignore PROXMOX_VM_STORAGE.
-    proxmox_clone_full: bool = True
+    # Clone lié (full=0, défaut Omega) ou clone complet (full=1). Le clone lié
+    # ignore PROXMOX_VM_STORAGE et reste sur le storage du template (ceph).
+    proxmox_clone_full: bool = False
     # Délai max (secondes) d'attente de la fin de la tâche de clonage avant
     # d'appliquer la configuration de la VM.
     proxmox_clone_timeout: int = 300

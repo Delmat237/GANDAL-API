@@ -14,10 +14,10 @@ def test_resolve_vlan_for_department_default():
 @pytest.mark.parametrize(
     "os_name,expected_template",
     [
-        ("Ubuntu", 9000),
-        ("ubuntu", 9000),
-        ("Ubuntu 22.04", 9000),
-        ("  ubuntu   22.04  ", 9000),
+        ("Ubuntu", 2299),
+        ("ubuntu", 2299),
+        ("Ubuntu 22.04", 2299),
+        ("  ubuntu   22.04  ", 2299),
         ("Debian", 9001),
         ("debian", 9001),
         ("Debian 12", 9001),

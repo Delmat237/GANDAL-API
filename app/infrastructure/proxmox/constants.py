@@ -1,5 +1,7 @@
+# Templates présents sur le nœud emilia (cluster Proxmox de prod).
+# 2299 = omega-cloud-template (cloud-init), 9001 = omega-template-base.
 OS_TEMPLATES: dict[str, int] = {
-    "Ubuntu 22.04": 9000,
+    "Ubuntu 22.04": 2299,
     "Debian 12": 9001,
 }
 
