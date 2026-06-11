@@ -14,6 +14,20 @@ def resolve_vlan_for_department(departement: str) -> int:
 
 
 def resolve_template_for_os(os_name: str) -> int:
-    if os_name not in OS_TEMPLATES:
-        raise ValueError(f"OS non supporté: {os_name}")
-    return OS_TEMPLATES[os_name]
+    if not isinstance(os_name, str):
+        supported_os = ", ".join(OS_TEMPLATES.keys())
+        raise ValueError(f"OS non supporté: {os_name}. Les OS supportés sont : {supported_os}")
+
+    # Normalisation : minuscules, suppression des espaces en début/fin et
+    # réduction des espaces multiples internes à un seul espace.
+    normalized = " ".join(os_name.lower().split())
+
+    # Mapping des alias
+    if normalized in ("ubuntu", "ubuntu 22.04"):
+        return OS_TEMPLATES["Ubuntu 22.04"]
+    elif normalized in ("debian", "debian 12"):
+        return OS_TEMPLATES["Debian 12"]
+
+    supported_os = ", ".join(OS_TEMPLATES.keys())
+    raise ValueError(f"OS non supporté: {os_name}. Les OS supportés sont : {supported_os}")
+
