@@ -87,6 +87,21 @@ class VM(Base):
     dns_entries = relationship("DNSEntry", back_populates="vm", cascade="all, delete-orphan")
 
 
+class NetworkLink(Base):
+    """Lien réseau (arête de la toile) entre deux VMs omega, par VMID Proxmox.
+
+    Stocke l'INTENTION (qui est relié à qui) ; l'enforcement réel est fait par
+    vm-link.sh sur les nœuds. Source fiable pour dessiner les arêtes du graphe.
+    """
+    __tablename__ = "network_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vmid_a = Column(Integer, nullable=False, index=True)
+    vmid_b = Column(Integer, nullable=False, index=True)
+    group_name = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Requete(Base):
     __tablename__ = "requetes"
 

@@ -10,6 +10,7 @@ from app.core.database import check_db_connection
 from app.core.exceptions import register_exception_handlers
 from app.core.logging_config import setup_logging
 from app.features.auth.router import router as auth_router
+from app.features.cluster.router import router as cluster_router
 from app.features.dns.router import router as dns_router
 from app.features.publications.router import router as publications_router
 from app.features.requetes.router import router as requetes_router
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(requetes_router, prefix=prefix)
     app.include_router(publications_router, prefix=prefix)
     app.include_router(dns_router, prefix=prefix)
+    app.include_router(cluster_router, prefix=prefix)
 
     @app.get("/health")
     def health() -> dict:

@@ -42,6 +42,22 @@ class Settings(BaseSettings):
     proxmox_vm_storage: str = "local-lvm"
     proxmox_net0_template: str = "virtio,bridge=vmbr0"
 
+    # ── Backend Omega on-premise ─────────────────────────────────────────────
+    # Sélecteur d'implémentation du ProxmoxGateway :
+    #   "auto"   → omega si pvesh local (= sur un nœud PVE) sinon mock
+    #   "omega"  → force le gateway Omega (pilote nos scripts omega-remote-paging)
+    #   "proxmoxer" → client proxmoxer historique des collègues
+    #   "mock"   → mock en mémoire
+    proxmox_backend: Literal["auto", "omega", "proxmoxer", "mock"] = "auto"
+    # Racine du dépôt omega-remote-paging (contient scripts/). Sur emilia : /opt/omega-remote-paging.
+    omega_repo_root: str = "/opt/omega-remote-paging"
+    omega_cluster_conf: str = ""        # vide = <repo_root>/scripts/cluster.conf
+    omega_controller_host: str = ""     # vide = OMEGA_CONTROLLER de cluster.conf (mode ssh)
+    omega_ssh_user: str = "root"
+    omega_ssh_key: str = ""             # vide = SSH_KEY de cluster.conf
+    omega_exec_mode: Literal["auto", "local", "ssh"] = "auto"
+    omega_cmd_timeout_secs: int = 30
+
     email_backend: Literal["log", "smtp"] = "log"
     smtp_host: str = "localhost"
     smtp_port: int = 587

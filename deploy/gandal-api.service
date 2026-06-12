@@ -1,0 +1,18 @@
+[Unit]
+Description=GANDAL-API — plan de contrôle on-premise du cluster Omega
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Le service doit tourner sur le contrôleur (emilia) pour accéder à pvesh/qm en local.
+WorkingDirectory=/opt/gandal/GANDAL-API
+EnvironmentFile=/opt/gandal/GANDAL-API/.env
+ExecStart=/opt/gandal/GANDAL-API/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+# Accès aux scripts omega-remote-paging et à la clé SSH si mode ssh.
+User=root
+
+[Install]
+WantedBy=multi-user.target
