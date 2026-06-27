@@ -63,3 +63,16 @@ class RAccountCreate(BaseModel):
 
 class RAccountRead(RAccountCreate, RequeteReadBase):
     type: Literal["r_account"]
+
+
+class RDomainCreate(BaseModel):
+    object: str
+    content: Optional[str] = None
+    teacher_id: int
+    vm_id: int
+    hostname: str   # nom_choisi (ex: monapp → monapp.enspy-gi.gandal)
+    port: int       # port exposé dans la VM (3000, 5000, 8080...)
+
+
+class RDomainRead(RDomainCreate, RequeteReadBase):
+    type: Literal["r_domain"]

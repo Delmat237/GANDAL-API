@@ -171,6 +171,21 @@ class RAccount(Requete):
     }
 
 
+class RDomain(Requete):
+    __tablename__ = "r_domains"
+
+    id = Column(Integer, ForeignKey("requetes.id"), primary_key=True)
+    vm_id = Column(Integer, ForeignKey("vms.id"), nullable=False)
+    hostname = Column(String(100), nullable=False)   # nom_choisi (sans suffixe)
+    port = Column(Integer, nullable=False)            # port exposé dans la VM
+
+    vm = relationship("VM", foreign_keys=[vm_id])
+
+    __mapper_args__ = {
+        "polymorphic_identity": "r_domain",
+    }
+
+
 class Publication(Base):
     __tablename__ = "publications"
 

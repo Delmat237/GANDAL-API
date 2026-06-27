@@ -20,9 +20,10 @@ from app.infrastructure import factories
 from app.shared.models import User, VM
 from app.shared.policies.permissions import AuthorizationPolicy
 
-from .schemas import (AutostartRequest, DnsRequest, GpuRequest, InternetToggle,
-                      NetworkLinkRequest, ReconcileResult, ReconfigureRequest,
-                      TopologyResponse)
+from .schemas import (AutostartRequest, CreateVMRequest, CreateVMResponse,
+                      DnsRequest, DomainRequest, ExposeRequest, GpuRequest,
+                      InternetToggle, NetworkLinkRequest, ReconcileResult,
+                      ReconfigureRequest, TopologyResponse)
 from .service import ClusterService
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
@@ -41,6 +42,20 @@ def get_topology(
     only_owner = None if AuthorizationPolicy.is_admin_or_superadmin(user) \
         or _is_teacher(user) else user.id
     return _service(db).topology(only_owner_id=only_owner)
+
+
+@router.post("/vms", response_model=CreateVMResponse, status_code=201)
+def create_vm(
+    body: CreateVMRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> CreateVMResponse:
+    """Crée et provisionne une VM directement (bouton « + » de la toile)."""
+    res = _service(db).create_vm(
+        user, name=body.name, vcpu=body.vcpu, ram_gb=body.ram_gb,
+        disk_gb=body.disk_gb, vram_gb=body.vram_gb, internet=body.internet,
+        autostart=body.autostart)
+    return CreateVMResponse(**res)
 
 
 @router.get("/distribution")
@@ -89,6 +104,37 @@ def toggle_internet(
 ):
     """Connecte/déconnecte une VM à internet (geste ludique de la toile)."""
     return _service(db).set_internet(user, vm_id, body.enable)
+
+
+@router.post("/vms/{vm_id}/llm-access")
+def toggle_llm_access(
+    vm_id: int,
+    body: InternetToggle,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """Ouvre/ferme l'accès ÉTROIT d'une VM à la gateway LLM (reste isolée par ailleurs)."""
+    return _service(db).set_llm_access(user, vm_id, body.enable)
+
+
+@router.post("/llm-access/reconcile")
+def reconcile_llm_access(
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+    prune: bool = False,
+):
+    """Réconcilie l'accès LLM : toute VM démarrée avec vram>0 obtient l'accès gateway."""
+    return _service(db).reconcile_llm_access(prune=prune)
+
+
+@router.delete("/vms/{vmid}", status_code=204)
+def delete_vm(
+    vmid: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """Détruit une VM par VMID (DNS retiré + destroy purge) et retire la ligne DB."""
+    _service(db).delete_vm(user, vmid)
 
 
 @router.post("/vms/{vmid}/start")
@@ -142,6 +188,30 @@ def set_autostart(
 ):
     """Active/désactive le redémarrage automatique (always-on)."""
     return _service(db).set_autostart(user, vmid, body.enable)
+
+
+@router.post("/vms/{vmid}/expose")
+def expose_service(
+    vmid: int,
+    body: ExposeRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """Publie un service de la VM vers le LAN (port-forward pfSense)."""
+    return _service(db).expose_service(
+        user, vmid, service_port=body.service_port, ext_port=body.ext_port,
+        hostname=body.hostname, proto=body.proto, enable=body.enable)
+
+
+@router.post("/vms/{vmid}/domain")
+def add_domain(
+    vmid: int,
+    body: DomainRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """Publie un service VM sous un nom de domaine SANS port (reverse proxy)."""
+    return _service(db).add_domain(user, vmid, body.hostname, body.port, body.enable)
 
 
 @router.post("/vms/{vmid}/dns")

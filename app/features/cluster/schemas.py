@@ -13,6 +13,7 @@ class TopologyVM(BaseModel):
     internet: bool = False               # connectée à internet ?
     maxcpu: int | None = None
     maxmem: int | None = None
+    vram_mib: int = 0                     # GPU alloué (VRAM partagée)
     owner_id: int | None = None          # propriétaire (mapping DB), si connu
     owner_name: str | None = None
 
@@ -61,3 +62,37 @@ class AutostartRequest(BaseModel):
 
 class DnsRequest(BaseModel):
     hostname: str | None = None      # vide = nom par défaut omega-<vmid>
+
+
+class ExposeRequest(BaseModel):
+    service_port: int                # port du service DANS la VM
+    ext_port: int | None = None      # port externe (pfSense). Vide = même port.
+    hostname: str | None = None      # nom DNS → pfSense (accès par nom depuis le LAN)
+    proto: str = "tcp"
+    enable: bool = True              # False = retirer l'exposition
+
+
+class DomainRequest(BaseModel):
+    """Domaine SANS port : http://nom.enspy-gi.gandal → service VM (reverse proxy)."""
+    hostname: str                    # nom (sous-domaine), sans le suffixe
+    port: int                        # port du service HTTP dans la VM
+    enable: bool = True              # False = retirer le domaine
+
+
+class CreateVMRequest(BaseModel):
+    """Création directe d'une VM (bouton « + » de la toile). Pas de type d'OS :
+    le projet impose son image (Debian/omega préparée)."""
+    name: str | None = None
+    vcpu: int = 4                    # plafond vCPU (élastique, plancher 1)
+    ram_gb: int = 4
+    disk_gb: int = 20
+    vram_gb: int = 0                 # GPU partagé (0 = aucun)
+    internet: bool = False           # ouvrir Internet dès la création
+    autostart: bool = False          # always-on
+
+
+class CreateVMResponse(BaseModel):
+    vm_id: int                       # id applicatif
+    vmid: int | None = None          # VMID Proxmox (dispo une fois alloué)
+    status: str
+    job: str = "provisioning"

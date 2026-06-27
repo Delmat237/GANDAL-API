@@ -1,8 +1,13 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.shared.models import RAccount, RCreateVM, RDeleteVM, Requete, Student
-from app.shared.schemas.requete import RAccountCreate, RCreateVMCreate, RDeleteVMCreate
+from app.shared.models import RAccount, RCreateVM, RDeleteVM, RDomain, Requete, Student
+from app.shared.schemas.requete import (
+    RAccountCreate,
+    RCreateVMCreate,
+    RDeleteVMCreate,
+    RDomainCreate,
+)
 
 
 class RequeteRepository:
@@ -77,6 +82,20 @@ class RequeteRepository:
             justification=data.justification,
             matricule=data.matricule,
             organisation=data.organisation,
+        )
+        self.db.add(req)
+        self.db.flush()
+        return req
+
+    def create_r_domain(self, data: RDomainCreate, student_id: int) -> RDomain:
+        req = RDomain(
+            object=data.object,
+            content=data.content,
+            student_id=student_id,
+            teacher_id=data.teacher_id,
+            vm_id=data.vm_id,
+            hostname=data.hostname,
+            port=data.port,
         )
         self.db.add(req)
         self.db.flush()

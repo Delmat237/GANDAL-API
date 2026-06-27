@@ -16,6 +16,8 @@ from app.shared.schemas.requete import (
     RCreateVMRead,
     RDeleteVMCreate,
     RDeleteVMRead,
+    RDomainCreate,
+    RDomainRead,
 )
 
 router = APIRouter(prefix="/requetes", tags=["requetes"])
@@ -52,7 +54,17 @@ def account_request(
     return RequeteService(db).create_r_account(current_user, data)
 
 
-@router.get("", response_model=PaginatedResponse[Union[RCreateVMRead, RDeleteVMRead, RAccountRead]])
+@router.post("/domain", response_model=RDomainRead, status_code=201)
+def domain_request(
+    data: RDomainCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> RDomainRead:
+    """Demande de nom de domaine: nom_choisi → http vers VM_IP:port (reverse-proxy)."""
+    return RequeteService(db).create_r_domain(current_user, data)
+
+
+@router.get("", response_model=PaginatedResponse[Union[RCreateVMRead, RDeleteVMRead, RAccountRead, RDomainRead]])
 def list_requetes(
     pagination: Annotated[PaginationParams, Depends()],
     db: Annotated[Session, Depends(get_db)],

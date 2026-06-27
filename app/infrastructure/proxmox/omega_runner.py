@@ -99,3 +99,19 @@ class OmegaRunner:
 
     def run_shell(self, script: str, timeout: int | None = None) -> CmdResult:
         return self.run(["bash", "-c", script], timeout=timeout)
+
+    def run_local(self, argv: list[str], timeout: int | None = None) -> CmdResult:
+        """Exécute TOUJOURS en local (subprocess), quel que soit le mode.
+
+        Sert aux scripts qui touchent pfSense : ils doivent tourner sur un hôte qui
+        joint pfSense (la console VM), pas sur le contrôleur PVE (emilia ne joint pas
+        pfSense:22). Suppose donc que le backend tourne sur un hôte du VLAN omega.
+        """
+        timeout = timeout or self.s.omega_cmd_timeout_secs
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+            return CmdResult(proc.returncode, proc.stdout, proc.stderr)
+        except subprocess.TimeoutExpired:
+            return CmdResult(124, "", f"timeout après {timeout}s")
+        except FileNotFoundError as e:
+            return CmdResult(127, "", str(e))

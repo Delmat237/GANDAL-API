@@ -85,22 +85,44 @@ class OmegaScriptGateway:
                     return ip
         return None
 
+    def reserve_vmid(self, exclude: set[int] | None = None) -> int:
+        """Alloue le prochain VMID libre (cluster + exclusions DB) — à réserver côté
+        appelant AVANT le provisionnement pour éviter les collisions concurrentes."""
+        base = int(self.runner.conf.get("OMEGA_NET_VM_VMID_BASE", "3000"))
+        used = {v.get("vmid") for v in self._cluster_vms()} | (exclude or set())
+        for cand in range(base, base + 1000):
+            if cand not in used:
+                return cand
+        raise ProxmoxIntegrationError("aucun VMID libre dans la plage omega")
+
     # ── Port ProxmoxGateway ──────────────────────────────────────────────────
     def provision_new_vm(self, name: str, template_vmid: int, ram_gb: float,
                          vcpu: int, ssh_pub_key: str,
-                         vlan_id: int | None = None) -> ProvisionResult:
+                         vlan_id: int | None = None,
+                         vmid: int | None = None) -> ProvisionResult:
         """Provisionne une VM via le script [p] (distribution 1/2/2 gérée par le script).
 
         vlan_id est ignoré : l'isolation VLAN 30 OMEGA est imposée par nos scripts
         (vm-isolation.sh) — pas de fuite vers d'autres VLAN académiques.
+        vmid : si fourni, utilise ce VMID (réservé par l'appelant) au lieu d'en allouer un.
         """
-        vmid = self._alloc_vmid()
+        if vmid is None:
+            vmid = self._alloc_vmid()
         conf = self.runner.conf
         nodes = conf.get("OMEGA_NODES", "")
+        controller = conf.get("OMEGA_CONTROLLER", "") or nodes.split(",")[0]
         disk_gib = int(conf.get("OMEGA_VM_DISK_MAX_GIB", "20"))
+        storage = conf.get("OMEGA_VM_STORAGE", "stockage.ceph")
+        template_id = conf.get("OMEGA_VM_TEMPLATE_ID", "")
+        # Bridge OMEGA (vmbr1 OVS) — IMPÉRATIF : le défaut vmbr0 du script de création
+        # n'existe pas sur le cluster → la VM ne peut pas démarrer (boucle recreate).
+        bridge = conf.get("OMEGA_VM_BRIDGE") or conf.get("OMEGA_NET_VM_BRIDGE") or "vmbr1"
         argv = [
             "bash", str(self.scripts / "provision-omega-vms-remote.sh"),
+            "--controller", controller,
             "--nodes", nodes,
+            "--storage", storage,
+            "--bridge", bridge,
             "--vmids", str(vmid),
             "--name", name or "omega-test",
             "--cores", str(max(1, vcpu)),
@@ -108,6 +130,17 @@ class OmegaScriptGateway:
             "--disk-max-gib", str(disk_gib),
             "--resource-only",
         ]
+        # Template de clonage (9001) + flags du chemin omega validé ([p]).
+        if template_id:
+            argv += ["--template-id", str(template_id)]
+            if conf.get("OMEGA_VM_LINKED_CLONE", "1") == "1":
+                argv.append("--linked-clone")
+        if conf.get("OMEGA_VM_IMAGE_PREPARED", "1") == "1":
+            argv.append("--image-prepared")
+        if conf.get("OMEGA_NET_VM_VLAN_TAG"):
+            argv += ["--vm-vlan-tag", conf["OMEGA_NET_VM_VLAN_TAG"]]
+        if conf.get("OMEGA_NET_VM_DNS_IP"):
+            argv += ["--vm-dns-ip", conf["OMEGA_NET_VM_DNS_IP"]]
         if conf.get("OMEGA_NET_VM_IP_PREFIX"):
             argv += [
                 "--vm-ip-prefix", conf["OMEGA_NET_VM_IP_PREFIX"],
@@ -198,35 +231,130 @@ class OmegaScriptGateway:
                     out[int(parts[0])] = parts[1]
         return out
 
+    def _vm_specs(self) -> dict[int, dict]:
+        """Map vmid→{cores, mem_mib, vram_mib} depuis les CONFIGS (valable VM arrêtée,
+        contrairement à pvesh /cluster/resources qui renvoie 0 pour une VM stoppée)."""
+        script = (
+            "for f in /etc/pve/nodes/*/qemu-server/*.conf; do "
+            "vmid=$(basename \"$f\" .conf); "
+            "cores=$(grep -oE '^cores: [0-9]+' \"$f\" | grep -oE '[0-9]+'); "
+            "mem=$(grep -oE '^memory: [0-9]+' \"$f\" | grep -oE '[0-9]+'); "
+            "vram=$(grep -oE 'omega_gpu_vram_mib=[0-9]+' \"$f\" | grep -oE '[0-9]+$' | head -1); "
+            "echo \"$vmid ${cores:-0} ${mem:-0} ${vram:-0}\"; done")
+        r = self.runner.run_shell(script, timeout=20)
+        out: dict[int, dict] = {}
+        if r.ok:
+            for line in r.out.splitlines():
+                p = line.split()
+                if len(p) == 4 and p[0].isdigit():
+                    out[int(p[0])] = {"cores": int(p[1]), "mem_mib": int(p[2]),
+                                      "vram_mib": int(p[3])}
+        return out
+
+    def _pf_script(self, name: str) -> str:
+        """Chemin LOCAL d'un script pfSense (exécuté sur l'hôte qui joint pfSense)."""
+        from pathlib import Path as _P
+        return str(_P(self.s.omega_local_scripts) / name)
+
+    def _run_pf(self, argv: list[str], timeout: int = 90):
+        """Exécute un script pfSense en local si configuré, sinon via le runner normal."""
+        if self.s.omega_pfsense_local:
+            return self.runner.run_local(argv, timeout=timeout)
+        return self.runner.run(argv, timeout=timeout)
+
     def set_internet(self, vmid: int, enable: bool) -> None:
         action = "enable" if enable else "disable"
-        r = self.runner.run(["bash", str(self.scripts / "vm-internet.sh"),
-                            "--vmid", str(vmid), f"--{action}"], timeout=90)
+        # On passe la VRAIE IP (allocation dense → plus dérivable du VMID).
+        ip = self._assigned_ips().get(vmid)
+        sel = ["--ip", ip] if ip else ["--vmid", str(vmid)]
+        r = self._run_pf(["bash", self._pf_script("vm-internet.sh"),
+                         *sel, f"--{action}"], timeout=90)
         if not r.ok:
             raise ProxmoxIntegrationError(
                 f"vm-internet {action} {vmid}: {r.err.strip()[-200:] or r.rc}")
 
+    def set_llm_access(self, vmid: int, enable: bool) -> None:
+        """Ouvre/ferme l'accès ÉTROIT d'une VM à la gateway LLM (gateway_ip:port),
+        via llm-access.sh sur pfSense. La VM reste isolée du reste du LAN."""
+        action = "enable" if enable else "disable"
+        ip = self._assigned_ips().get(vmid)
+        sel = ["--ip", ip] if ip else ["--vmid", str(vmid)]
+        r = self._run_pf(["bash", self._pf_script("llm-access.sh"), *sel,
+                          f"--{action}", "--gateway", self.s.omega_llm_gateway_ip,
+                          "--gw-port", str(self.s.omega_llm_gateway_port)], timeout=90)
+        if not r.ok:
+            raise ProxmoxIntegrationError(
+                f"llm-access {action} {vmid}: {r.err.strip()[-200:] or r.rc}")
+
+    def reconcile_llm_access(self, threshold: int = 0, prune: bool = False) -> dict:
+        """Garantit que toute VM Omega DÉMARRÉE avec omega_gpu_vram_mib > threshold
+        a l'accès à la gateway LLM. Avec prune, retire l'accès des non-conformes.
+        Idempotent (llm-access.sh vérifie l'existant)."""
+        specs = self._vm_specs()
+        running = {v.get("vmid") for v in self._cluster_vms()
+                   if v.get("status") == "running"}
+        granted: list[int] = []
+        revoked: list[int] = []
+        skipped: list[int] = []
+        for vmid, spec in specs.items():
+            vram = spec.get("vram_mib", 0)
+            is_run = vmid in running
+            if vram > threshold:
+                if not is_run:
+                    skipped.append(vmid)
+                    continue
+                self.set_llm_access(vmid, True)
+                granted.append(vmid)
+            elif prune and is_run:
+                self.set_llm_access(vmid, False)
+                revoked.append(vmid)
+        return {"granted": granted, "revoked": revoked, "skipped": skipped}
+
     def list_internet_ips(self) -> set[str]:
-        """IPs des VMs ayant l'accès internet (parse vm-internet.sh --list)."""
-        r = self.runner.run(["bash", str(self.scripts / "vm-internet.sh"), "--list"],
-                            timeout=30)
+        """IPs des VMs ayant l'accès internet — lues DIRECTEMENT depuis les règles pfSense
+        chargées (pfctl), via les labels `omega-internet-A-B-C-D`. Fiable (contrairement au
+        --list PHP de vm-internet.sh, fragile à travers plusieurs couches SSH)."""
+        conf = self.runner.conf
+        pf_ip = conf.get("OMEGA_NET_PFSENSE_WAN_IP", "192.168.123.200")
+        pf_user = conf.get("OMEGA_NET_PFSENSE_SSH_USER", "admin")
+        pf_key = conf.get("SSH_KEY", "")
+        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+                   "-o", "ConnectTimeout=8"]
+        if pf_key:
+            ssh_cmd += ["-i", pf_key]
+        ssh_cmd += [f"{pf_user}@{pf_ip}", "pfctl -sr 2>/dev/null"]
+        r = self._run_pf(ssh_cmd, timeout=20)
         ips: set[str] = set()
         if r.ok:
-            for tok in re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", r.out):
-                ips.add(tok)
+            # label "omega-internet-10-50-30-101" → 10.50.30.101
+            for m in re.findall(r"omega-internet-(\d+)-(\d+)-(\d+)-(\d+)", r.out):
+                ips.add(".".join(m))
         return ips
 
     def link_vms(self, vmids: list[int], enable: bool, group_name: str | None = None) -> None:
-        """Relie (maillage) ou isole un groupe de VMs via vm-link.sh."""
+        """Relie ou isole des VMs via vm-link.sh (flux OVS sur les nœuds).
+
+        vm-link orchestre l'OVS sur TOUS les nœuds → s'exécute sur le contrôleur (qui
+        les joint), via le runner normal — PAS en local (la console ne joint pas ram/rem).
+        On passe `--nodes` explicite + les VRAIES IP (allocation dense, paires).
+        """
         action = "enable" if enable else "disable"
-        argv = ["bash", str(self.scripts / "vm-link.sh"),
-                "--group", ",".join(str(v) for v in vmids), f"--{action}"]
-        if group_name:
-            argv += ["--group-name", group_name]
-        r = self.runner.run(argv, timeout=120)
-        if not r.ok:
-            raise ProxmoxIntegrationError(
-                f"vm-link {action}: {r.err.strip()[-200:] or r.rc}")
+        nodes = self.runner.conf.get("OMEGA_NODES", "")
+        ips = self._assigned_ips()
+        scripts = str(self.scripts / "vm-link.sh")  # chemin sur le contrôleur (emilia)
+        # Maillage complet : toutes les paires du groupe, par IP réelle.
+        pairs = [(a, b) for i, a in enumerate(vmids) for b in vmids[i + 1:]]
+        for a, b in pairs:
+            ip_a, ip_b = ips.get(a), ips.get(b)
+            if not ip_a or not ip_b:
+                raise ProxmoxIntegrationError(
+                    f"IP introuvable pour la paire {a}/{b} (VM démarrée ?)")
+            argv = ["bash", scripts, "--nodes", nodes,
+                    "--ip-a", ip_a, "--ip-b", ip_b, f"--{action}"]
+            r = self.runner.run(argv, timeout=120)
+            if not r.ok:
+                raise ProxmoxIntegrationError(
+                    f"vm-link {action} {a}/{b}: {r.err.strip()[-200:] or r.rc}")
 
     def distribution_status(self) -> list[dict]:
         """Occupation par nœud vs cible 1/2/2 (réconciliateur --dry-run, lecture seule)."""
@@ -419,15 +547,86 @@ class OmegaScriptGateway:
             raise ProxmoxIntegrationError(f"autostart {vmid}: {r.err.strip() or r.rc}")
         return {"vmid": vmid, "autostart": enable}
 
+    # ── Exposition de service (vm-expose.sh — port-forward pfSense) ──────────
+    def expose_service(self, vmid: int, service_port: int, ext_port: int | None = None,
+                       hostname: str | None = None, proto: str = "tcp",
+                       enable: bool = True) -> dict:
+        """Publie/retire un service de la VM vers le LAN via NAT pfSense.
+
+        LAN(192.168.123.200):ext_port → VM_IP:service_port, + DNS nom→pfSense optionnel.
+        """
+        ip = self._assigned_ips().get(vmid)
+        if not ip:
+            raise ProxmoxIntegrationError(f"VM {vmid} : IP introuvable")
+        ext = ext_port or service_port
+        argv = ["bash", self._pf_script("vm-expose.sh"), "--ip", ip,
+                "--service-port", str(service_port), "--ext-port", str(ext),
+                "--proto", proto]
+        if enable and hostname:
+            argv += ["--name", hostname]
+        argv.append("--enable" if enable else "--disable")
+        r = self._run_pf(argv, timeout=90)
+        if not r.ok:
+            raise ProxmoxIntegrationError(
+                f"expose {vmid}: {r.err.strip()[-200:] or r.rc}")
+        pf_ip = self.runner.conf.get("OMEGA_NET_PFSENSE_WAN_IP", "192.168.123.200")
+        return {"vmid": vmid, "ip": ip, "service_port": service_port,
+                "ext_port": ext, "enable": enable, "pfsense": pf_ip,
+                "hostname": hostname, "url": f"http://{pf_ip}:{ext}" if enable else None}
+
+    # ── Domaine SANS port (reverse proxy Caddy sur la console) ───────────────
+    def add_domain(self, vmid: int, hostname: str, port: int,
+                   enable: bool = True) -> dict:
+        """Publie un service VM sous un nom de domaine SANS port (http://nom...).
+
+        1) relie le proxy (console) à la VM backend (lien réseau, sur le contrôleur) ;
+        2) ajoute/retire le site Caddy + DNS (sur la console qui joint pfSense).
+        """
+        ip = self._assigned_ips().get(vmid)
+        if not ip:
+            raise ProxmoxIntegrationError(f"VM {vmid} : IP introuvable")
+        proxy_ip = self.s.omega_proxy_host_ip
+        if enable:
+            # 1) ouvrir le chemin proxy→backend (vm-link sur le contrôleur)
+            nodes = self.runner.conf.get("OMEGA_NODES", "")
+            lk = self.runner.run(["bash", str(self.scripts / "vm-link.sh"),
+                                  "--nodes", nodes, "--ip-a", proxy_ip, "--ip-b", ip,
+                                  "--enable"], timeout=120)
+            if not lk.ok:
+                raise ProxmoxIntegrationError(
+                    f"lien proxy↔VM {vmid}: {lk.err.strip()[-150:] or lk.rc}")
+            # 2) site Caddy + DNS (sur la console)
+            r = self._run_pf(["bash", self._pf_script("proxy-domain.sh"),
+                             "--name", hostname, "--ip", ip, "--port", str(port),
+                             "--enable"], timeout=60)
+        else:
+            r = self._run_pf(["bash", self._pf_script("proxy-domain.sh"),
+                             "--name", hostname, "--disable"], timeout=60)
+        if not r.ok:
+            raise ProxmoxIntegrationError(
+                f"domaine {hostname}: {r.err.strip()[-200:] or r.rc}")
+        suffix = self.runner.conf.get("OMEGA_NET_DNS_DOMAIN", "enspy-gi.gandal")
+        url = f"http://{hostname.lower()}.{suffix}" if enable else None
+        return {"vmid": vmid, "hostname": hostname, "port": port,
+                "enable": enable, "url": url}
+
     # ── DNS (dns-register.sh) ────────────────────────────────────────────────
     def dns_register(self, vmid: int, hostname: str | None = None) -> dict:
-        argv = ["bash", str(self.scripts / "dns-register.sh"), "--vmid", str(vmid)]
-        if hostname:
-            argv += ["--name", hostname]
-        r = self.runner.run(argv, timeout=60)
+        # On passe --name ET --ip explicitement : dns-register tourne en LOCAL sur la
+        # console (qui joint pfSense) et NE PEUT PAS lire les configs des nœuds pour
+        # résoudre le nom par --vmid → on lui fournit tout (pas de recherche nœud).
+        ip = self._assigned_ips().get(vmid)
+        if not ip:
+            raise ProxmoxIntegrationError(f"VM {vmid} : IP introuvable (VM provisionnée ?)")
+        name = hostname
+        if not name:
+            cv = self._find(vmid)
+            name = (cv.get("name") if cv else None) or f"omega-{vmid}"
+        r = self._run_pf(["bash", self._pf_script("dns-register.sh"),
+                         "--name", name, "--ip", ip], timeout=60)
         if not r.ok:
             raise ProxmoxIntegrationError(f"dns register {vmid}: {r.err.strip()[-200:] or r.rc}")
-        return {"vmid": vmid, "hostname": hostname}
+        return {"vmid": vmid, "hostname": name, "ip": ip}
 
     # ── Migrations (tâches cluster Proxmox) ──────────────────────────────────
     def migrations(self, limit: int = 25) -> list[dict]:
@@ -461,11 +660,17 @@ class OmegaScriptGateway:
         vms = [v for v in self._cluster_vms() if _is_omega(v)]
         internet_ips = self.list_internet_ips()
         ip_map = self._assigned_ips()
+        specs = self._vm_specs()  # cores/mem/vram fiables (même VM arrêtée)
         nodes_set = sorted({v.get("node") for v in vms if v.get("node")})
         out_vms = []
         for v in vms:
             vmid = v.get("vmid")
             ip = ip_map.get(vmid)
+            sp = specs.get(vmid, {})
+            # maxcpu/maxmem de pvesh = 0 si VM arrêtée → on retombe sur la config.
+            cpu = v.get("maxcpu") or sp.get("cores") or None
+            mem_mib = sp.get("mem_mib") or (
+                int(v.get("maxmem", 0) / 1024 / 1024) if v.get("maxmem") else 0)
             out_vms.append({
                 "vmid": vmid,
                 "name": v.get("name"),
@@ -473,8 +678,9 @@ class OmegaScriptGateway:
                 "status": _STATUS_MAP.get(v.get("status", "stopped"), "stopped"),
                 "ip": ip,
                 "internet": ip in internet_ips,
-                "maxcpu": v.get("maxcpu"),
-                "maxmem": v.get("maxmem"),
+                "maxcpu": cpu,
+                "maxmem": mem_mib * 1024 * 1024 if mem_mib else None,
+                "vram_mib": sp.get("vram_mib", 0),
             })
         return {"hosts": nodes_set, "vms": out_vms}
 

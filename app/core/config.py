@@ -57,6 +57,20 @@ class Settings(BaseSettings):
     omega_ssh_key: str = ""             # vide = SSH_KEY de cluster.conf
     omega_exec_mode: Literal["auto", "local", "ssh"] = "auto"
     omega_cmd_timeout_secs: int = 30
+    # Racine des scripts omega PRÉSENTS LOCALEMENT (pour les scripts pfSense exécutés
+    # en local sur la console VM, qui joint pfSense contrairement à emilia). Vide =
+    # <omega_repo_root>/scripts. Mettre /opt/omega-remote-paging sur la console VM.
+    omega_local_scripts: str = "/opt/omega-remote-paging/scripts"
+    # IP de l'hôte reverse-proxy (la VM console qui fait tourner Caddy + joint pfSense).
+    # Sert à relier le proxy aux VMs backend (lien réseau) pour les domaines sans port.
+    omega_proxy_host_ip: str = "10.50.30.50"
+    # Exécuter les scripts pfSense (vm-internet/vm-link/dns) en local plutôt que sur
+    # le contrôleur (recommandé quand exec_mode=ssh et le backend joint pfSense).
+    omega_pfsense_local: bool = True
+    # Gateway LLM unifiée (LiteLLM, OpenAI-compatible). Les VMs avec
+    # omega_gpu_vram_mib > 0 reçoivent un accès réseau ÉTROIT vers cet hôte:port.
+    omega_llm_gateway_ip: str = "192.168.123.100"
+    omega_llm_gateway_port: int = 4000
 
     email_backend: Literal["log", "smtp"] = "log"
     smtp_host: str = "localhost"

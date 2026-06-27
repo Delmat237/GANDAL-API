@@ -14,10 +14,15 @@ from app.features.vms.service import VMService
 from app.infrastructure import factories
 from app.infrastructure.proxmox.constants import resolve_template_for_os, resolve_vlan_for_department
 from app.infrastructure.proxmox.proxmox_client import ProxmoxIntegrationError
-from app.shared.models import RAccount, RCreateVM, RDeleteVM, Requete, Student, User, VM
+from app.shared.models import RAccount, RCreateVM, RDeleteVM, RDomain, Requete, Student, User, VM
 from app.shared.policies.permissions import AuthorizationPolicy
 from app.shared.policies.states import RequestStatePolicy, StateTransitionError, VMStatePolicy
-from app.shared.schemas.requete import RAccountCreate, RCreateVMCreate, RDeleteVMCreate
+from app.shared.schemas.requete import (
+    RAccountCreate,
+    RCreateVMCreate,
+    RDeleteVMCreate,
+    RDomainCreate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +104,18 @@ class RequeteService:
         self.db.refresh(req)
         return req
 
+    def create_r_domain(self, user: User, data: RDomainCreate) -> RDomain:
+        if not isinstance(user, Student):
+            raise ForbiddenError(
+                "Seuls les étudiants peuvent demander un nom de domaine")
+        vm = self.vm_repo.get(data.vm_id)
+        if vm is None or vm.user_id != user.id:
+            raise ForbiddenError("VM invalide (doit vous appartenir)")
+        req = self.repo.create_r_domain(data, user.id)
+        self.db.commit()
+        self.db.refresh(req)
+        return req
+
     def approve(self, user: User, requete_id: int, ssh_public_key: str = "") -> Requete:
         requete = self.get_requete(requete_id)
         self._ensure_evaluate(user, requete)
@@ -123,6 +140,11 @@ class RequeteService:
             if account_req is None:
                 raise NotFoundError("Requête account introuvable")
             self._approve_account(account_req)
+        elif requete.type == "r_domain":
+            domain_req = self.db.get(RDomain, requete_id)
+            if domain_req is None:
+                raise NotFoundError("Requête domaine introuvable")
+            self._approve_domain(domain_req)
 
         requete.status = RequestStatePolicy.VALIDATED
         self.db.commit()
@@ -149,48 +171,32 @@ class RequeteService:
             raise NotFoundError("Étudiant introuvable")
 
         n_cpu = requete.n_cpu or 2
-        proxmox_vmid: int | None = None
-        node: str | None = None
-        status = VMStatePolicy.WAITING
-
-        if not get_settings().proxmox_simulation_mode:
-            template = resolve_template_for_os(requete.os)
-            vlan = resolve_vlan_for_department(student.departement)
-            name = f"vm-{student.matricule}-{requete.id}"
-            try:
-                result = self.proxmox.provision_new_vm(
-                    name=name,
-                    template_vmid=template,
-                    ram_gb=float(requete.size_ram),
-                    vcpu=n_cpu,
-                    ssh_pub_key=ssh_public_key,
-                    vlan_id=vlan,
-                )
-                proxmox_vmid = result.vmid
-                node = result.node
-                status = VMStatePolicy.UP
-            except ProxmoxIntegrationError:
-                # Proxmox injoignable : on n'échoue pas l'approbation. La VM est
-                # enregistrée en base avec le statut "waiting" pour un
-                # provisionnement ultérieur (worker ou intervention manuelle).
-                logger.exception(
-                    "Provisionnement Proxmox échoué pour la requête %s ; VM enregistrée en attente.",
-                    requete.id,
-                )
-
+        # La VM est enregistrée en "waiting" (provisionnement en cours) ; le
+        # provisionnement réel [p] (1-2 min) tourne en TÂCHE DE FOND pour ne pas bloquer
+        # l'approbation, puis met à jour vmid/node/status quand il aboutit.
         vm = VM(
             size_rom=requete.size_rom,
             size_ram=requete.size_ram,
             n_cpu=n_cpu,
             iso=requete.os,
             iso_image=requete.os,
-            id_proxmox=proxmox_vmid,
-            node=node,
-            status=status,
+            status=VMStatePolicy.WAITING,
             ssh_public_key=ssh_public_key,
             user_id=student.id,
         )
         self.db.add(vm)
+        self.db.flush()  # attribue vm.id
+
+        if not get_settings().proxmox_simulation_mode:
+            _provision_async(
+                vm_id=vm.id,
+                name=f"vm-{student.matricule}-{requete.id}",
+                os_name=requete.os,
+                departement=student.departement,
+                ram_gb=float(requete.size_ram),
+                vcpu=n_cpu,
+                ssh_pub_key=ssh_public_key,
+            )
 
     def _approve_delete_vm(self, requete: RDeleteVM) -> None:
         vm = self.vm_repo.get(requete.vm_id)
@@ -211,6 +217,15 @@ class RequeteService:
         password = secrets.token_urlsafe(12)
         UserService(self.db).create_user_from_raccount(requete, password)
 
+    def _approve_domain(self, requete: RDomain) -> None:
+        """Crée le mapping http://<hostname>.<suffixe> → VM_IP:port (reverse-proxy Caddy)."""
+        vm = self.vm_repo.get(requete.vm_id)
+        if vm is None:
+            raise NotFoundError("VM introuvable")
+        if not get_settings().proxmox_simulation_mode and vm.id_proxmox:
+            self.proxmox.add_domain(
+                vm.id_proxmox, requete.hostname, requete.port, True)
+
     def _notify(self, requete: Requete, status_label: str) -> None:
         student = self.repo.get_student(requete.student_id)
         if student:
@@ -219,3 +234,43 @@ class RequeteService:
                 f"Requête {status_label}",
                 f"Votre requête '{requete.object}' a été {status_label}.",
             )
+
+
+def _provision_async(vm_id: int, name: str, os_name: str, departement: str,
+                     ram_gb: float, vcpu: int, ssh_pub_key: str) -> None:
+    """Provisionne la VM en arrière-plan (thread) et met à jour sa ligne en base.
+
+    Utilise une session DB neuve (le thread ne partage pas celle de la requête HTTP).
+    En cas d'échec, la VM reste en 'waiting' (réessayable) et l'erreur est loguée.
+    """
+    import threading
+
+    def _run() -> None:
+        from app.core.database import SessionLocal
+        gateway = factories.get_proxmox_gateway()
+        try:
+            template = resolve_template_for_os(os_name)
+        except ValueError:
+            template = 9001  # défaut Debian/omega
+        vlan = resolve_vlan_for_department(departement)
+        try:
+            result = gateway.provision_new_vm(
+                name=name, template_vmid=template, ram_gb=ram_gb,
+                vcpu=vcpu, ssh_pub_key=ssh_pub_key, vlan_id=vlan)
+        except Exception:  # noqa: BLE001
+            logger.exception("Provisionnement asynchrone échoué pour VM %s", vm_id)
+            return
+        db = SessionLocal()
+        try:
+            vm = db.get(VM, vm_id)
+            if vm is not None:
+                vm.id_proxmox = result.vmid
+                vm.node = result.node
+                vm.status = VMStatePolicy.UP
+                db.commit()
+                logger.info("VM %s provisionnée (vmid=%s, node=%s)",
+                            vm_id, result.vmid, result.node)
+        finally:
+            db.close()
+
+    threading.Thread(target=_run, daemon=True).start()
