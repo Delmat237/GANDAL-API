@@ -19,6 +19,9 @@ class StudentCreate(UserBase):
     matricule: str
     level: str
     departement: str
+    # Optionnel : seul le super admin l'utilise pour désigner le superviseur.
+    # Quand c'est un enseignant qui crée, le superviseur = lui (forcé serveur).
+    supervisor_id: Optional[int] = None
 
 
 class StudentUpdate(BaseModel):
@@ -36,6 +39,8 @@ class StudentRead(UserBase):
     matricule: str
     level: str
     departement: str
+    is_active: bool = True
+    supervisor_id: Optional[int] = None
 
 
 # ── Teacher ───────────────────────────────────────────────────────────────────
@@ -57,3 +62,13 @@ class TeacherRead(UserBase):
     id: int
     type: Literal["teacher"]
     role: str
+    is_active: bool = True
+
+
+class TeacherPublic(BaseModel):
+    """Vue minimale exposée publiquement (formulaire d'inscription étudiant) :
+    juste de quoi choisir son enseignant superviseur, sans données sensibles."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str

@@ -11,9 +11,30 @@ class AuthorizationPolicy:
         return False
 
     @staticmethod
+    def is_superadmin(user: User) -> bool:
+        """Super admin = sommet de la hiérarchie (voit tout, gère les enseignants,
+        traite les demandes de domaine)."""
+        return isinstance(user, Teacher) and user.role == "SuperAdmin"
+
+    @staticmethod
     def is_student(user: User) -> bool:
         """Vérifie si l'utilisateur est un étudiant."""
         return isinstance(user, Student)
+
+    @staticmethod
+    def can_manage_student(user: User, student: Student) -> bool:
+        """Super admin gère tout étudiant ; un enseignant uniquement SES étudiants
+        (ceux dont il est le superviseur, càd dont il a validé le compte)."""
+        if AuthorizationPolicy.is_superadmin(user):
+            return True
+        if isinstance(user, Teacher):
+            return student.supervisor_id == user.id
+        return False
+
+    @staticmethod
+    def can_manage_teacher(user: User) -> bool:
+        """Seul le super admin gère (crée / bloque / supprime) les enseignants."""
+        return AuthorizationPolicy.is_superadmin(user)
 
     @staticmethod
     def can_manage_vm(user: User, vm: VM) -> bool:

@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.shared.models import RAccount, RCreateVM, RDeleteVM, RDomain, Requete, Student
+from app.shared.models import RAccount, RCreateVM, RDeleteVM, RDomain, Requete, Student, Teacher
 from app.shared.schemas.requete import (
     RAccountCreate,
     RCreateVMCreate,
@@ -18,7 +18,9 @@ class RequeteRepository:
         return self.db.get(Requete, requete_id)
 
     def list_for_student(self, student_id: int, offset: int, limit: int) -> tuple[list[Requete], int]:
-        q = select(Requete).where(Requete.student_id == student_id)
+        # Tri décroissant par id (auto-incrément) = plus récentes en premier.
+        q = (select(Requete).where(Requete.student_id == student_id)
+             .order_by(Requete.id.desc()))
         total = self.db.execute(
             select(func.count()).select_from(Requete).where(
                 Requete.student_id == student_id)
@@ -28,7 +30,8 @@ class RequeteRepository:
         return items, total
 
     def list_for_teacher(self, teacher_id: int, offset: int, limit: int) -> tuple[list[Requete], int]:
-        q = select(Requete).where(Requete.teacher_id == teacher_id)
+        q = (select(Requete).where(Requete.teacher_id == teacher_id)
+             .order_by(Requete.id.desc()))
         total = self.db.execute(
             select(func.count()).select_from(Requete).where(
                 Requete.teacher_id == teacher_id)
@@ -40,8 +43,9 @@ class RequeteRepository:
     def list_all(self, offset: int, limit: int) -> tuple[list[Requete], int]:
         total = self.db.execute(
             select(func.count()).select_from(Requete)).scalar_one()
-        items = list(self.db.execute(select(Requete).offset(
-            offset).limit(limit)).scalars().all())
+        items = list(self.db.execute(
+            select(Requete).order_by(Requete.id.desc())
+            .offset(offset).limit(limit)).scalars().all())
         return items, total
 
     def create_r_create_vm(self, data: RCreateVMCreate, student_id: int) -> RCreateVM:
@@ -71,17 +75,19 @@ class RequeteRepository:
         self.db.flush()
         return req
 
-    def create_r_account(self, data: RAccountCreate, student_id: int) -> RAccount:
+    def create_r_account(self, data: RAccountCreate, student_id: int | None = None,
+                         password_hash: str | None = None) -> RAccount:
         req = RAccount(
             object=data.object,
             content=data.content,
-            student_id=student_id,
+            student_id=student_id,  # None pour une auto-inscription
             teacher_id=data.teacher_id,
             nom=data.nom,
             email=data.email,
             justification=data.justification,
             matricule=data.matricule,
             organisation=data.organisation,
+            password_hash=password_hash,
         )
         self.db.add(req)
         self.db.flush()
@@ -103,3 +109,10 @@ class RequeteRepository:
 
     def get_student(self, student_id: int) -> Student | None:
         return self.db.get(Student, student_id)
+
+    def get_superadmin(self) -> Teacher | None:
+        """Le super admin (destinataire des demandes de domaine). On prend le plus
+        ancien si plusieurs existent."""
+        return self.db.execute(
+            select(Teacher).where(Teacher.role == "SuperAdmin").order_by(Teacher.id)
+        ).scalars().first()

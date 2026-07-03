@@ -32,6 +32,16 @@ class PublicationRepository:
             q.offset(offset).limit(limit)).scalars().all())
         return items, total
 
+    def list_by_status(self, status: str, offset: int, limit: int) -> tuple[list[Publication], int]:
+        q = select(Publication).where(Publication.status == status)
+        total = self.db.execute(
+            select(func.count()).select_from(Publication).where(
+                Publication.status == status)
+        ).scalar_one()
+        items = list(self.db.execute(
+            q.offset(offset).limit(limit)).scalars().all())
+        return items, total
+
     def list_all(self, offset: int, limit: int) -> tuple[list[Publication], int]:
         total = self.db.execute(
             select(func.count()).select_from(Publication)).scalar_one()

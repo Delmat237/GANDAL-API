@@ -32,6 +32,21 @@ def get_current_user(
     return user
 
 
+def get_optional_user(
+    db: Annotated[Session, Depends(get_db)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> User | None:
+    """Utilisateur courant si un token valide est présent, sinon None (endpoint
+    public — ex. l'auto-inscription). Ne lève jamais 401."""
+    if credentials is None or not credentials.credentials:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials)
+        return db.get(User, int(payload["sub"]))
+    except Exception:
+        return None
+
+
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
     if not AuthorizationPolicy.is_admin_or_superadmin(user):
         raise ForbiddenError("Droits administrateur requis")
@@ -41,6 +56,12 @@ def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
 def require_teacher_or_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
     if not isinstance(user, Teacher):
         raise ForbiddenError("Enseignant ou administrateur requis")
+    return user
+
+
+def require_superadmin(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if not AuthorizationPolicy.is_superadmin(user):
+        raise ForbiddenError("Droits super administrateur requis")
     return user
 
 

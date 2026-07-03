@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_optional_user
 from app.features.requetes.service import RequeteService
 from app.shared.models import User
 from app.shared.schemas.common import PaginatedResponse, PaginationParams
@@ -49,8 +49,10 @@ def delete_vm_request(
 def account_request(
     data: RAccountCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User | None, Depends(get_optional_user)],
 ) -> RAccountRead:
+    """Demande d'inscription (auto-signup). PUBLIC : accessible sans être connecté
+    (un nouvel étudiant n'a pas encore de compte). L'enseignant choisi la valide."""
     return RequeteService(db).create_r_account(current_user, data)
 
 

@@ -20,7 +20,10 @@ class ClusterService:
         self.gw = gateway
 
     # ── Topologie pour la toile ──────────────────────────────────────────────
-    def topology(self, only_owner_id: int | None = None) -> TopologyResponse:
+    def topology(self, allowed_owner_ids: set[int] | None = None) -> TopologyResponse:
+        """allowed_owner_ids None = toute la flotte (super admin) ; sinon, ne montre que
+        les VMs appartenant à l'un de ces propriétaires (étudiant = lui-même ;
+        enseignant = ses étudiants supervisés)."""
         data = _safe(lambda: self.gw.topology(), {"hosts": [], "vms": []})
 
         # Mapping vmid → (owner_id, owner_name) depuis la DB.
@@ -36,14 +39,16 @@ class ClusterService:
         for v in data.get("vms", []):
             vmid = v["vmid"]
             owner = owners.get(vmid)
-            if only_owner_id is not None and (owner is None or owner[0] != only_owner_id):
-                continue  # étudiant : ne voit que ses VMs
+            if allowed_owner_ids is not None and (
+                    owner is None or owner[0] not in allowed_owner_ids):
+                continue  # restreint aux propriétaires autorisés (soi / supervisés)
             visible_vmids.add(vmid)
             vms.append(TopologyVM(
                 vmid=vmid, name=v.get("name"), node=v.get("node"),
                 status=v.get("status", "stopped"), ip=v.get("ip"),
                 internet=v.get("internet", False), maxcpu=v.get("maxcpu"),
                 maxmem=v.get("maxmem"), vram_mib=v.get("vram_mib", 0),
+                disk_gib=v.get("disk_gib"),
                 owner_id=owner[0] if owner else None,
                 owner_name=owner[1] if owner else None,
             ))
@@ -51,7 +56,7 @@ class ClusterService:
         # Arêtes : liens réseau persistés, restreints aux VMs visibles.
         links: list[TopologyLink] = []
         for link in self.db.query(NetworkLink).all():
-            if only_owner_id is not None and not (
+            if allowed_owner_ids is not None and not (
                 link.vmid_a in visible_vmids and link.vmid_b in visible_vmids
             ):
                 continue

@@ -37,6 +37,17 @@ class UserRepository:
             offset).limit(limit)).scalars().all())
         return items, total
 
+    def list_students_by_supervisor(
+        self, supervisor_id: int, offset: int, limit: int
+    ) -> tuple[list[Student], int]:
+        cond = Student.supervisor_id == supervisor_id
+        total = self.db.execute(
+            select(func.count()).select_from(Student).where(cond)).scalar_one()
+        items = list(self.db.execute(
+            select(Student).where(cond).offset(offset).limit(limit)
+        ).scalars().all())
+        return items, total
+
     def list_teachers(self, offset: int, limit: int) -> tuple[list[Teacher], int]:
         total = self.db.execute(
             select(func.count()).select_from(Teacher)).scalar_one()

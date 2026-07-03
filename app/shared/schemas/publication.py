@@ -14,7 +14,9 @@ class PublicationBase(BaseModel):
 
 
 class PublicationCreate(PublicationBase):
-    user_id: int
+    # Dérivé du token (utilisateur authentifié) côté service ; le front n'a pas
+    # à l'envoyer. Optionnel pour éviter un 422 quand le formulaire ne le fournit pas.
+    user_id: Optional[int] = None
 
 
 class PublicationUpdate(BaseModel):

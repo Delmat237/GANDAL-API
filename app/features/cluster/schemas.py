@@ -14,6 +14,7 @@ class TopologyVM(BaseModel):
     maxcpu: int | None = None
     maxmem: int | None = None
     vram_mib: int = 0                     # GPU alloué (VRAM partagée)
+    disk_gib: int | None = None          # taille disque scsi0 actuelle (Gio)
     owner_id: int | None = None          # propriétaire (mapping DB), si connu
     owner_name: str | None = None
 

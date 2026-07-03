@@ -45,7 +45,30 @@ class PublicationService:
         if not isinstance(user, Teacher) and not AuthorizationPolicy.is_admin_or_superadmin(user):
             raise ForbiddenError("Seuls les enseignants peuvent publier")
         data.user_id = user.id
+        # Workflow de validation : une demande d'un enseignant entre en "draft"
+        # (en attente). Le super admin la valide pour la faire apparaître au
+        # catalogue. Le super admin qui publie lui-même va direct en "published".
+        data.status = "published" if AuthorizationPolicy.is_superadmin(user) else "draft"
         pub = self.repo.create(data)
+        self.db.commit()
+        self.db.refresh(pub)
+        return pub
+
+    def list_pending(self, user: User, page: int, size: int):
+        """Demandes de publication en attente — réservé au super admin."""
+        if not AuthorizationPolicy.is_superadmin(user):
+            raise ForbiddenError("Seul le super admin valide les publications")
+        offset = (page - 1) * size
+        return self.repo.list_by_status("draft", offset, size)
+
+    def set_status(self, user: User, publication_id: int, status: str):
+        """Valide (published) ou rejette (archived) une publication — super admin."""
+        if not AuthorizationPolicy.is_superadmin(user):
+            raise ForbiddenError("Seul le super admin valide les publications")
+        pub = self.repo.get(publication_id)
+        if pub is None:
+            raise NotFoundError("Publication introuvable")
+        pub.status = status
         self.db.commit()
         self.db.refresh(pub)
         return pub

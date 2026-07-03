@@ -18,6 +18,9 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True)
     password = Column(String(255), nullable=False)
     type = Column(String(50), nullable=False)
+    # Compte actif : False = bloqué OU (étudiant) en attente de validation par
+    # son enseignant. Un compte inactif ne peut pas se connecter.
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 
     vms = relationship("VM", back_populates="user",
                        cascade="all, delete-orphan")
@@ -37,9 +40,15 @@ class Student(User):
     matricule = Column(String(50), nullable=False, unique=True)
     level = Column(String(50), nullable=False)
     departement = Column(String(100), nullable=False)
+    # Enseignant superviseur = celui qui a validé le compte de l'étudiant.
+    # NULL tant que le compte n'est pas validé. Détermine la visibilité (le prof
+    # ne voit que SES étudiants) et le routage des demandes de VM.
+    supervisor_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
 
     sent_requests = relationship(
         "Requete", foreign_keys="Requete.student_id", back_populates="student")
+    supervisor = relationship(
+        "Teacher", foreign_keys=[supervisor_id], back_populates="students")
 
     __mapper_args__ = {
         "polymorphic_identity": "student",
@@ -54,6 +63,9 @@ class Teacher(User):
 
     received_requests = relationship(
         "Requete", foreign_keys="Requete.teacher_id", back_populates="teacher")
+    students = relationship(
+        "Student", foreign_keys="Student.supervisor_id",
+        back_populates="supervisor")
 
     __mapper_args__ = {
         "polymorphic_identity": "teacher",
@@ -115,8 +127,14 @@ class Requete(Base):
         default="pending",
     )
 
-    student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
-    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
+    # Nullable : une demande d'INSCRIPTION (r_account en self-signup) n'a pas
+    # encore d'étudiant en base — il est créé à l'approbation. Pour les autres
+    # types, l'étudiant demandeur est toujours renseigné.
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=True)
+    # Destinataire de la requête. Nullable : une demande peut être en attente
+    # d'affectation (rare) ; surtout, les demandes de domaine sont routées au
+    # super admin et les autres à l'enseignant superviseur de l'étudiant.
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
 
     student = relationship("Student", foreign_keys=[
                            student_id], back_populates="sent_requests")
@@ -165,6 +183,9 @@ class RAccount(Requete):
     justification = Column(Text)
     matricule = Column(String(50))
     organisation = Column(String(150))
+    # Mot de passe choisi par l'étudiant à l'inscription, stocké HACHÉ (argon2).
+    # Réutilisé tel quel à l'approbation pour créer le compte (jamais en clair).
+    password_hash = Column(String(255))
 
     __mapper_args__ = {
         "polymorphic_identity": "r_account",

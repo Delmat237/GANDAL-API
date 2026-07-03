@@ -34,6 +34,9 @@ class AuthService:
         user = self.repo.get_by_username_or_email(data.username)
         if user is None or not verify_password(data.password, user.password):
             raise UnauthorizedError("Identifiants invalides")
+        if not getattr(user, "is_active", True):
+            raise ForbiddenError(
+                "Compte désactivé ou en attente de validation par un enseignant.")
         token = create_access_token(user.id, extra_claims={"type": user.type})
         return TokenResponse(access_token=token)
 

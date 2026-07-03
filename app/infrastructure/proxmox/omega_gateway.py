@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 
 from app.application.ports.proxmox_gateway import ProvisionResult
@@ -23,6 +24,27 @@ logger = logging.getLogger(__name__)
 _STATUS_MAP = {"running": "up", "stopped": "stopped",
                "paused": "waiting", "suspended": "waiting"}
 
+# ─── Allocation de VMID infaillible (anti-collision) ──────────────────────────
+# L'API tourne en UN seul process uvicorn (provisionings lancés en threads +
+# réconciliateur). Un verrou process-global + un registre des VMID « réservés en
+# vol » (alloués mais dont la VM n'existe pas encore sur le cluster) garantissent
+# que deux créations concurrentes ne piochent JAMAIS le même numéro — le scan de
+# `/cluster/resources` seul (TOCTOU) ne suffisait pas.
+_VMID_LOCK = threading.Lock()
+_RESERVED_VMIDS: set[int] = set()
+
+
+def _slug_vm_name(name: str | None) -> str:
+    """Nettoie un nom saisi par l'UI en nom Proxmox valide (type DNS : lettres,
+    chiffres, tirets). Sinon `qm/pvesh set --name` échoue atomiquement → la VM
+    n'est ni créée ni renommée. Retourne '' si rien d'exploitable."""
+    import re
+    import unicodedata
+    if not name:
+        return ""
+    ascii_name = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9-]+", "-", ascii_name.strip().lower()).strip("-")[:60]
+
 
 class OmegaScriptGateway:
     """Adapte les scripts omega-remote-paging au port ProxmoxGateway."""
@@ -35,7 +57,7 @@ class OmegaScriptGateway:
     # ── Helpers cluster ──────────────────────────────────────────────────────
     def _cluster_vms(self) -> list[dict]:
         r = self.runner.run(["pvesh", "get", "/cluster/resources", "--type", "vm",
-                             "--output-format", "json"])
+                             "--output-format", "json"], retry=True)
         if not r.ok:
             raise ProxmoxIntegrationError(f"pvesh resources: {r.err.strip() or r.rc}")
         try:
@@ -49,13 +71,58 @@ class OmegaScriptGateway:
                 return v
         return None
 
-    def _alloc_vmid(self) -> int:
+    def _all_config_vmids(self) -> set[int]:
+        """VMID de TOUTES les VM du cluster, lus depuis les .conf de pmxcfs
+        (/etc/pve/nodes/*/qemu-server/*.conf) — source de vérité RÉPLIQUÉE, complète
+        même si un nœud ne rapporte pas ses VM via `pvesh /cluster/resources` (vue
+        partielle intermittente). INDISPENSABLE pour ne JAMAIS réattribuer un VMID
+        existant (sinon le script d'approvisionnement ADOPTE la VM d'un autre → collision)."""
+        r = self.runner.run_shell(
+            "for f in /etc/pve/nodes/*/qemu-server/*.conf; do "
+            "basename \"$f\" .conf; done 2>/dev/null; true", timeout=20)
+        out: set[int] = set()
+        for line in (r.out or "").splitlines():
+            s = line.strip()
+            if s.isdigit():
+                out.add(int(s))
+        return out
+
+    def _alloc_vmid(self, exclude: set[int] | None = None) -> int:
+        """Réserve ATOMIQUEMENT le prochain VMID libre et l'ajoute au registre en-vol.
+
+        L'appelant DOIT libérer via `_release_vmid()` (finally) une fois la VM créée
+        (elle apparaît alors dans `/cluster/resources`) ou l'échec constaté. Le verrou
+        sérialise les allocations concurrentes → pas de collision (cf 3020/3018).
+        """
         base = int(self.runner.conf.get("OMEGA_NET_VM_VMID_BASE", "3000"))
-        used = {v.get("vmid") for v in self._cluster_vms()}
-        for cand in range(base, base + 1000):
-            if cand not in used:
-                return cand
+        with _VMID_LOCK:
+            # Union de DEUX sources : pmxcfs (.conf, complet/fiable) ET /cluster/resources
+            # (peut être partiel). On ne se fie JAMAIS à la seule vue pvesh : un nœud qui
+            # ne rapporte pas ses VM y ferait apparaître un VMID pris comme « libre ».
+            cfg_ids = self._all_config_vmids()
+            try:
+                pve_ids = {v.get("vmid") for v in self._cluster_vms()}
+            except ProxmoxIntegrationError:
+                pve_ids = set()
+            if not cfg_ids and not pve_ids:
+                # Les deux lectures ont échoué → impossible de garantir l'unicité :
+                # on REFUSE d'allouer plutôt que de risquer d'écraser une VM existante.
+                raise ProxmoxIntegrationError(
+                    "allocation VMID impossible : vue cluster indisponible (pmxcfs + pvesh)")
+            used = cfg_ids | pve_ids | _RESERVED_VMIDS | (exclude or set())
+            for cand in range(base, base + 1000):
+                if cand not in used:
+                    _RESERVED_VMIDS.add(cand)
+                    return cand
         raise ProxmoxIntegrationError("aucun VMID libre dans la plage omega")
+
+    @staticmethod
+    def _release_vmid(vmid: int | None) -> None:
+        """Retire un VMID du registre en-vol (à appeler en finally après création)."""
+        if vmid is None:
+            return
+        with _VMID_LOCK:
+            _RESERVED_VMIDS.discard(vmid)
 
     def _node_of(self, vmid: int) -> str | None:
         cv = self._find(vmid)
@@ -86,32 +153,42 @@ class OmegaScriptGateway:
         return None
 
     def reserve_vmid(self, exclude: set[int] | None = None) -> int:
-        """Alloue le prochain VMID libre (cluster + exclusions DB) — à réserver côté
-        appelant AVANT le provisionnement pour éviter les collisions concurrentes."""
-        base = int(self.runner.conf.get("OMEGA_NET_VM_VMID_BASE", "3000"))
-        used = {v.get("vmid") for v in self._cluster_vms()} | (exclude or set())
-        for cand in range(base, base + 1000):
-            if cand not in used:
-                return cand
-        raise ProxmoxIntegrationError("aucun VMID libre dans la plage omega")
+        """Alloue le prochain VMID libre (cluster + réservés en-vol + exclusions DB),
+        à réserver AVANT le provisionnement. Le VMID est marqué réservé jusqu'à
+        `_release_vmid()` → aucune collision concurrente possible."""
+        return self._alloc_vmid(exclude=exclude)
 
     # ── Port ProxmoxGateway ──────────────────────────────────────────────────
     def provision_new_vm(self, name: str, template_vmid: int, ram_gb: float,
                          vcpu: int, ssh_pub_key: str,
+                         disk_gb: int | None = None,
                          vlan_id: int | None = None,
-                         vmid: int | None = None) -> ProvisionResult:
+                         vmid: int | None = None,
+                         exclude_vmids: set[int] | None = None) -> ProvisionResult:
         """Provisionne une VM via le script [p] (distribution 1/2/2 gérée par le script).
 
         vlan_id est ignoré : l'isolation VLAN 30 OMEGA est imposée par nos scripts
         (vm-isolation.sh) — pas de fuite vers d'autres VLAN académiques.
-        vmid : si fourni, utilise ce VMID (réservé par l'appelant) au lieu d'en allouer un.
+        vmid : si fourni, utilise ce VMID (déjà réservé par l'appelant) au lieu d'en
+        allouer un. Sinon on réserve ATOMIQUEMENT le prochain libre (verrou + registre
+        en-vol + `exclude_vmids`, ex. les id_proxmox déjà en base) → zéro collision.
         """
+        reserved = None  # VMID réservé PAR NOUS ici → à libérer en finally
         if vmid is None:
-            vmid = self._alloc_vmid()
+            vmid = self._alloc_vmid(exclude=exclude_vmids)
+            reserved = vmid
+        try:
+            return self._provision_with_vmid(name, ram_gb, vcpu, disk_gb, vmid)
+        finally:
+            self._release_vmid(reserved)
+
+    def _provision_with_vmid(self, name: str, ram_gb: float, vcpu: int,
+                             disk_gb: int | None, vmid: int) -> ProvisionResult:
         conf = self.runner.conf
         nodes = conf.get("OMEGA_NODES", "")
         controller = conf.get("OMEGA_CONTROLLER", "") or nodes.split(",")[0]
-        disk_gib = int(conf.get("OMEGA_VM_DISK_MAX_GIB", "20"))
+        # Taille choisie par l'utilisateur (slider) ; repli sur le défaut de conf.
+        disk_gib = int(disk_gb) if disk_gb else int(conf.get("OMEGA_VM_DISK_MAX_GIB", "20"))
         storage = conf.get("OMEGA_VM_STORAGE", "stockage.ceph")
         template_id = conf.get("OMEGA_VM_TEMPLATE_ID", "")
         # Bridge OMEGA (vmbr1 OVS) — IMPÉRATIF : le défaut vmbr0 du script de création
@@ -124,7 +201,7 @@ class OmegaScriptGateway:
             "--storage", storage,
             "--bridge", bridge,
             "--vmids", str(vmid),
-            "--name", name or "omega-test",
+            "--name", _slug_vm_name(name) or f"omega-{vmid}",
             "--cores", str(max(1, vcpu)),
             "--memory", str(int(ram_gb * 1024)),
             "--disk-max-gib", str(disk_gib),
@@ -152,12 +229,38 @@ class OmegaScriptGateway:
                 "--vm-ip-max", conf.get("OMEGA_NET_VM_IP_MAX", "253"),
             ]
         logger.info("Omega provision VM %s (vmid=%s) via [p]", name, vmid)
+        # Snapshot AVANT : notre pré-allocation `_alloc_vmid` ne verrouille rien
+        # (TOCTOU) ; si le VMID demandé est déjà pris — course entre deux approbations,
+        # ou vue cluster partielle — le script en choisit un autre. On doit alors
+        # enregistrer le VMID RÉELLEMENT créé, sinon deux lignes DB pointent la même VM.
+        before = {v.get("vmid") for v in self._cluster_vms()}
         r = self.runner.run(argv, timeout=900)
+        after_vms = self._cluster_vms()
+        if vmid in {v.get("vmid") for v in after_vms}:
+            actual = vmid  # cas nominal : le script a bien pris le VMID demandé
+        else:
+            new_ids = sorted(i for i in ({v.get("vmid") for v in after_vms} - before)
+                             if i is not None)
+            if len(new_ids) == 1:
+                actual = new_ids[0]
+                logger.warning("Omega provision : VMID demandé %s indisponible → le script "
+                               "a créé %s, on adopte le VMID réel", vmid, actual)
+            else:
+                actual = vmid  # ambigu (0 ou >1 nouvelle VM) : on garde le demandé
+        vmid = actual
+        cv = next((v for v in after_vms if v.get("vmid") == vmid), None)
         if not r.ok:
-            logger.error("Omega provision échec vmid=%s: %s", vmid, r.err[-500:])
-            raise ProxmoxIntegrationError(
-                f"provisioning vmid {vmid} échoué: {r.err.strip()[-300:] or r.rc}")
-        cv = self._find(vmid)
+            # CRUCIAL anti-doublon : le script peut échouer sur une étape POST-création
+            # (install proxys, attente QGA, drop SSH rc 255…) ALORS QUE LA VM EST CRÉÉE.
+            # Si elle existe → on l'ADOPTE comme succès (sinon l'appelant croit à un échec,
+            # laisse la VM en waiting et le réconciliateur en recrée une autre = doublons).
+            if cv is None:
+                logger.error("Omega provision échec vmid=%s (VM absente): %s",
+                             vmid, r.err[-500:])
+                raise ProxmoxIntegrationError(
+                    f"provisioning vmid {vmid} échoué: {r.err.strip()[-300:] or r.rc}")
+            logger.warning("Omega provision vmid=%s : script rc=%s mais VM CRÉÉE → adoptée "
+                           "(post-traitement best-effort à reprendre)", vmid, r.rc)
         node = (cv or {}).get("node") or conf.get("OMEGA_CONTROLLER", "")
         status = _STATUS_MAP.get((cv or {}).get("status", "running"), "up")
         return ProvisionResult(vmid=vmid, name=name, node=node, status=status)
@@ -190,9 +293,12 @@ class OmegaScriptGateway:
             return  # déjà absente
         self.runner.run(["pvesh", "create", f"/nodes/{node}/qemu/{vmid}/status/stop"],
                         timeout=60)
+        # NB : PAS de --destroy-unreferenced-disks : ce flag déclenche un `rbd ls` du pool
+        # entier qui ÉCHOUE sur ce Ceph (« rbd: listing images failed ») → la tâche
+        # qmdestroy plante avant de purger le .conf → la VM semble « non supprimée » (500).
+        # --purge supprime déjà les disques RÉFÉRENCÉS de la VM, ce qui suffit.
         r = self.runner.run(
-            ["pvesh", "delete", f"/nodes/{node}/qemu/{vmid}",
-             "--purge", "1", "--destroy-unreferenced-disks", "1"], timeout=120)
+            ["pvesh", "delete", f"/nodes/{node}/qemu/{vmid}", "--purge", "1"], timeout=120)
         if not r.ok:
             raise ProxmoxIntegrationError(f"pvesh destroy {vmid}: {r.err.strip() or r.rc}")
 
@@ -217,18 +323,22 @@ class OmegaScriptGateway:
         L'IP n'étant plus dérivée du VMID, on lit la valeur réelle. Une seule commande
         grep cluster-wide sur /etc/pve (monté partout).
         """
+        # NB: le code retour de la boucle vaut celui de sa DERNIÈRE itération ; une
+        # config finale sans ipconfig0 (VM stoppée) faisait échouer `[ -n ... ]` → RC=1
+        # → l'ancien `if r.ok` jetait TOUTE la sortie → plus aucune IP dans l'UI.
+        # On force RC=0 (`|| true` + `true` final) ET on parse la sortie quel que soit
+        # r.ok : une vraie panne SSH renvoie une sortie vide, donc c'est sans risque.
         r = self.runner.run_shell(
             "grep -rhoE '^[0-9]+|ipconfig0:.*ip=[0-9.]+/' /dev/null; "
             "for f in /etc/pve/nodes/*/qemu-server/*.conf; do "
             "vmid=$(basename \"$f\" .conf); "
             "ip=$(grep -oE '^ipconfig0:.*ip=[0-9.]+/' \"$f\" 2>/dev/null | grep -oE 'ip=[0-9.]+/' | head -1 | sed 's/ip=//;s#/##'); "
-            "[ -n \"$ip\" ] && echo \"$vmid $ip\"; done", timeout=20)
+            "[ -n \"$ip\" ] && echo \"$vmid $ip\" || true; done; true", timeout=20)
         out: dict[int, str] = {}
-        if r.ok:
-            for line in r.out.splitlines():
-                parts = line.split()
-                if len(parts) == 2 and parts[0].isdigit():
-                    out[int(parts[0])] = parts[1]
+        for line in (r.out or "").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].isdigit():
+                out[int(parts[0])] = parts[1]
         return out
 
     def _vm_specs(self) -> dict[int, dict]:
@@ -237,18 +347,28 @@ class OmegaScriptGateway:
         script = (
             "for f in /etc/pve/nodes/*/qemu-server/*.conf; do "
             "vmid=$(basename \"$f\" .conf); "
-            "cores=$(grep -oE '^cores: [0-9]+' \"$f\" | grep -oE '[0-9]+'); "
-            "mem=$(grep -oE '^memory: [0-9]+' \"$f\" | grep -oE '[0-9]+'); "
+            "cores=$(grep -oE '^cores: [0-9]+' \"$f\" | grep -oE '[0-9]+' | head -1); "
+            "mem=$(grep -oE '^memory: [0-9]+' \"$f\" | grep -oE '[0-9]+' | head -1); "
             "vram=$(grep -oE 'omega_gpu_vram_mib=[0-9]+' \"$f\" | grep -oE '[0-9]+$' | head -1); "
-            "echo \"$vmid ${cores:-0} ${mem:-0} ${vram:-0}\"; done")
-        r = self.runner.run_shell(script, timeout=20)
+            "disk=$(grep -oE '^scsi0:.*size=[0-9]+[A-Z]' \"$f\" | grep -oE 'size=[0-9]+[A-Z]' | grep -oE '[0-9]+[A-Z]' | head -1); "
+            "echo \"$vmid ${cores:-0} ${mem:-0} ${vram:-0} ${disk:-0}\"; done")
+        r = self.runner.run_shell(script, timeout=20, retry=True)
         out: dict[int, dict] = {}
         if r.ok:
             for line in r.out.splitlines():
                 p = line.split()
-                if len(p) == 4 and p[0].isdigit():
-                    out[int(p[0])] = {"cores": int(p[1]), "mem_mib": int(p[2]),
-                                      "vram_mib": int(p[3])}
+                if len(p) < 4 or not p[0].isdigit():
+                    continue
+                # Défensif : une ligne mal formée (ex. config avec snapshots) ne doit
+                # JAMAIS faire échouer toute la topologie (sinon l'UI se vide). On saute.
+                try:
+                    spec = {"cores": int(p[1]), "mem_mib": int(p[2]),
+                            "vram_mib": int(p[3])}
+                    if len(p) >= 5:
+                        spec["disk_gib"] = _disk_token_to_gib(p[4])
+                    out[int(p[0])] = spec
+                except (ValueError, IndexError):
+                    continue
         return out
 
     def _pf_script(self, name: str) -> str:
@@ -470,7 +590,11 @@ class OmegaScriptGateway:
 
         set_args: list[str] = []
         if name:
-            set_args += ["--name", name]
+            # Proxmox exige un nom de type DNS ; on nettoie ce que l'UI envoie sinon
+            # `pvesh set --name` échoue ATOMIQUEMENT et rien ne change.
+            slug = _slug_vm_name(name)
+            if slug:
+                set_args += ["--name", slug]
         if vcpu_max is not None and vcpu_max >= 2:
             set_args += ["--cores", str(vcpu_max)]
             omega["omega_max_vcpus"] = vcpu_max
@@ -681,8 +805,19 @@ class OmegaScriptGateway:
                 "maxcpu": cpu,
                 "maxmem": mem_mib * 1024 * 1024 if mem_mib else None,
                 "vram_mib": sp.get("vram_mib", 0),
+                "disk_gib": sp.get("disk_gib") or None,
             })
         return {"hosts": nodes_set, "vms": out_vms}
+
+
+def _disk_token_to_gib(token: str) -> int:
+    """Convertit un token de taille Proxmox (ex. '20G', '5120M', '1T') en GiB entiers."""
+    m = re.match(r"(\d+)([KMGT]?)", token or "")
+    if not m:
+        return 0
+    n = int(m.group(1))
+    factor = {"K": 1 / 1024 / 1024, "M": 1 / 1024, "G": 1, "T": 1024, "": 1}.get(m.group(2), 1)
+    return int(n * factor)
 
 
 _OMEGA_TAG = re.compile(r"(^|[;, ])omega([;, ]|$)")

@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     omega_ssh_key: str = ""             # vide = SSH_KEY de cluster.conf
     omega_exec_mode: Literal["auto", "local", "ssh"] = "auto"
     omega_cmd_timeout_secs: int = 30
+    omega_ssh_retries: int = 2          # retries sur échec SSH transitoire (jitter LAN)
+    omega_ssh_retry_backoff_secs: float = 0.8
     # Racine des scripts omega PRÉSENTS LOCALEMENT (pour les scripts pfSense exécutés
     # en local sur la console VM, qui joint pfSense contrairement à emilia). Vide =
     # <omega_repo_root>/scripts. Mettre /opt/omega-remote-paging sur la console VM.

@@ -38,19 +38,32 @@ def get_topology(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> TopologyResponse:
-    """Topologie pour la toile. Étudiant = ses VMs ; enseignant/admin = toute la flotte."""
-    only_owner = None if AuthorizationPolicy.is_admin_or_superadmin(user) \
-        or _is_teacher(user) else user.id
-    return _service(db).topology(only_owner_id=only_owner)
+    """Topologie pour la toile. Super admin = toute la flotte ; enseignant = les VMs de
+    ses étudiants supervisés (= celles dont il approuve la création) ; étudiant = ses VMs."""
+    if AuthorizationPolicy.is_admin_or_superadmin(user):
+        allowed = None  # toute la flotte
+    elif _is_teacher(user):
+        from app.shared.models import Student
+        allowed = {
+            sid for (sid,) in db.query(Student.id)
+            .filter(Student.supervisor_id == user.id).all()
+        }
+    else:
+        allowed = {user.id}
+    return _service(db).topology(allowed_owner_ids=allowed)
 
 
 @router.post("/vms", response_model=CreateVMResponse, status_code=201)
 def create_vm(
     body: CreateVMRequest,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_teacher_or_admin)],
 ) -> CreateVMResponse:
-    """Crée et provisionne une VM directement (bouton « + » de la toile)."""
+    """Crée et provisionne une VM directement (bouton « + » de la toile).
+
+    RÉSERVÉ AUX ENSEIGNANTS/ADMINS. Un étudiant ne crée jamais une VM
+    directement : il en fait la DEMANDE (`POST /requetes/create-vm`), que son
+    enseignant superviseur valide."""
     res = _service(db).create_vm(
         user, name=body.name, vcpu=body.vcpu, ram_gb=body.ram_gb,
         disk_gb=body.disk_gb, vram_gb=body.vram_gb, internet=body.internet,

@@ -115,6 +115,14 @@ def install_openapi_permissions(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     setup_logging()
+    # Auto-guérison : re-provisionne tout seul les VMs bloquées en waiting (drop SSH,
+    # congestion…). Aucune intervention manuelle requise.
+    try:
+        from app.features.requetes.provision_reconciler import start_provision_reconciler
+        start_provision_reconciler()
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception("démarrage réconciliateur provisioning raté")
     yield
 
 

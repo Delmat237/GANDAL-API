@@ -7,8 +7,10 @@ RequeteStatus = Literal["pending", "validated", "rejected"]
 class RequeteBase(BaseModel):
     object: str
     content: Optional[str] = None
-    student_id: int
-    teacher_id: int
+    # Nullable : une auto-inscription (r_account) n'a pas encore d'étudiant ;
+    # teacher_id peut aussi être absent selon le routage.
+    student_id: Optional[int] = None
+    teacher_id: Optional[int] = None
 
 
 class RequeteReadBase(RequeteBase):
@@ -24,7 +26,9 @@ class RequeteReadBase(RequeteBase):
 class RCreateVMCreate(BaseModel):
     object: str
     content: Optional[str] = None
-    teacher_id: int
+    # Destinataire calculé côté serveur (enseignant superviseur) — le client
+    # n'a pas à le fournir ; conservé optionnel pour compat.
+    teacher_id: Optional[int] = None
     size_rom: int
     size_ram: int
     n_cpu: int = 2
@@ -40,7 +44,7 @@ class RCreateVMRead(RCreateVMCreate, RequeteReadBase):
 class RDeleteVMCreate(BaseModel):
     object: str
     content: Optional[str] = None
-    teacher_id: int
+    teacher_id: Optional[int] = None  # calculé serveur (superviseur)
     vm_id: int
 
 
@@ -56,19 +60,26 @@ class RAccountCreate(BaseModel):
     teacher_id: int
     nom: str
     email: EmailStr
+    password: str   # choisi par l'étudiant à l'inscription (haché côté serveur)
     justification: Optional[str] = None
     matricule: Optional[str] = None
     organisation: Optional[str] = None
 
 
-class RAccountRead(RAccountCreate, RequeteReadBase):
+class RAccountRead(RequeteReadBase):
+    # NE PAS exposer le mot de passe : on hérite de RequeteReadBase (pas de password).
     type: Literal["r_account"]
+    nom: str
+    email: EmailStr
+    justification: Optional[str] = None
+    matricule: Optional[str] = None
+    organisation: Optional[str] = None
 
 
 class RDomainCreate(BaseModel):
     object: str
     content: Optional[str] = None
-    teacher_id: int
+    teacher_id: Optional[int] = None  # calculé serveur (super admin)
     vm_id: int
     hostname: str   # nom_choisi (ex: monapp → monapp.enspy-gi.gandal)
     port: int       # port exposé dans la VM (3000, 5000, 8080...)
